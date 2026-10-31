@@ -16,6 +16,7 @@ from .discovery import (
 from .gitgh import detect_git_remote, init_git_and_github_repo
 from .srvctl import (
     PROJECT_TYPES,
+    REGISTRY_FILE,
     get_root,
     load_registry,
     make_entry,
@@ -145,8 +146,8 @@ def cmd_sync(args: argparse.Namespace) -> None:
     - ne supprime, ne déplace et ne modifie aucun dossier ;
     - ne crée, ne renomme et ne modifie aucun dépôt GitHub ;
     - détecte automatiquement type, port et remote GitHub des nouveaux projets ;
-    - met à jour uniquement les métadonnées détectables (root, vercel, remote) ;
-    - conserve type, port, start, status, priority, description et notes ;
+    - met à jour uniquement les métadonnées détectables (root, remote) ;
+    - conserve type, port, start, vercel, status, priority, description et notes ;
     - ignore les doublons de nom normalisé.
     """
     reg = load_registry()
@@ -176,8 +177,10 @@ def cmd_sync(args: argparse.Namespace) -> None:
                     existing["root"] = root
                     changes.append(f"root={root}")
 
-                detected_vercel = root == "projects"
-                if existing.get("vercel") != detected_vercel:
+                # Le choix Vercel d'un projet existant est conservé : seul un
+                # champ absent reçoit la valeur par défaut (root == "projects").
+                if "vercel" not in existing:
+                    detected_vercel = root == "projects"
                     existing["vercel"] = detected_vercel
                     existing["vercel_enabled"] = detected_vercel
                     changes.append(f"vercel={detected_vercel}")
@@ -243,6 +246,8 @@ def cmd_sync(args: argparse.Namespace) -> None:
             print(f"{len(updated)} projet(s) mis à jour.")
         print("Aucun dossier ni dépôt GitHub modifié.")
     else:
+        if not REGISTRY_FILE.exists():
+            save_registry(reg)
         _sync_env(list(reg.values()))
         _write_mk()
         print("Rien de nouveau à synchroniser.")
@@ -308,6 +313,15 @@ def cmd_status(args: argparse.Namespace) -> None:
         git_str = "pas-git" if not gs.get("tracked") else ("modifie" if gs.get("dirty") else "propre")
         vercel_str = "-" if not p.get("vercel") else ("lie" if is_linked(project_dir) else "non-lie")
         print(f"{p['name']:<14} {str(port or '-'):<6} {('UP' if up else 'DOWN'):<6} {git_str:<10} {vercel_str}")
+
+
+def cmd_get_start(args: argparse.Namespace) -> None:
+    """Affiche la commande `start` d'un projet (utilisée par make start pour les projets custom)."""
+    entry = load_registry().get(args.name)
+    if entry is None:
+        print(f"Projet inconnu : {args.name}", file=sys.stderr)
+        raise SystemExit(1)
+    print(entry.get("start") or "")
 
 
 def cmd_generate_mk(args: argparse.Namespace) -> None:
@@ -423,6 +437,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser("status", help="Statut live (port up/down, git, vercel)")
     p_status.set_defaults(func=cmd_status)
+
+    p_start = sub.add_parser("get-start", help="Affiche la commande start d'un projet")
+    p_start.add_argument("name")
+    p_start.set_defaults(func=cmd_get_start)
 
     p_mk = sub.add_parser("generate-mk", help="Génère .projects.mk sur stdout")
     p_mk.set_defaults(func=cmd_generate_mk)

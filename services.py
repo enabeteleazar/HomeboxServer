@@ -265,14 +265,14 @@ def _execute_action(
         if action in ("start", "stop", "restart"):
             cmd = [
                 sys.executable,
-                str(BASE_DIR / "srvctl.py"),
+                str(BASE_DIR / "srvctl" / "srvctl.py"),
                 action,
                 name,
             ]
         elif action == "dev":
             cmd = [
                 sys.executable,
-                str(BASE_DIR / "srvctl.py"),
+                str(BASE_DIR / "srvctl" / "srvctl.py"),
                 "start",
                 name,
             ]
@@ -364,7 +364,8 @@ def sync(source: str = "dashboard", wait: bool = True) -> dict:
         code, output = _run(
             [
                 sys.executable,
-                str(BASE_DIR / "srvctl.py"),
+                "-m",
+                "srvctl.cli",
                 "sync",
             ],
             timeout=900,

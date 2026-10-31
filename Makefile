@@ -22,7 +22,12 @@ SRVCTL := SRV_ROOT="$(ROOT)" SRV_REGISTRY="$(REGISTRY)" PYTHONPATH="$(ROOT)/dash
 -include .projects.mk
 
 .projects.mk: $(REGISTRY)
-	@$(SRVCTL) generate-mk > .projects.mk
+	@$(SRVCTL) generate-mk > .projects.mk.tmp && mv .projects.mk.tmp .projects.mk || { rm -f .projects.mk.tmp; exit 1; }
+
+# Registre absent (dépôt fraîchement cloné) : on crée un registre vide pour que
+# `make sync` puisse démarrer au lieu de s'arrêter sur « No rule to make target ».
+$(REGISTRY):
+	@mkdir -p "$(dir $@)" && echo '{"projects": []}' > "$@"
 
 # Reste des WEB_PROJECTS : simple "vite preview" au démarrage (les
 # projets à cycle de vie sur mesure listés dans CUSTOM_WEB_PROJECTS ont
@@ -39,7 +44,7 @@ PROJECT_DIR = $(PROJECT_DIR_$(PROJECT))
 	dev dev-all dev-project \
 	start start-all start-project \
 	stop stop-all stop-project \
-	status status-all status-project registre \
+	status status-all status-project print-project-port registre \
 	restart restart-all restart-project \
 	build build-all build-project \
 	test test-all test-project \
@@ -143,8 +148,9 @@ list:
 	@printf "%-14s %-6s %-8s %-8s %-45s\n" "--------------" "------" "--------" "--------" "---------------------------------------------"
 	@for project in $(PROJECTS); do \
 		key=$$(echo "$$project" | tr '[:lower:].-' '[:upper:]__'); \
-		port=$$(grep "^$${key}_PORT=" "$(ROOT)/.env" | cut -d= -f2); \
-		type=$$(grep "^$${key}_TYPE=" "$(ROOT)/.env" | cut -d= -f2); \
+		port=$$($(MAKE) --no-print-directory -s print-project-port PROJECT="$$project"); \
+		[ -n "$$port" ] || port=$$(grep "^$${key}_PORT=" "$(ROOT)/.env" 2>/dev/null | cut -d= -f2); \
+		type=$$(grep "^$${key}_TYPE=" "$(ROOT)/.env" 2>/dev/null | cut -d= -f2); \
 		path=$$($(MAKE) --no-print-directory _project-dir PROJECT="$$project"); \
 		vstatus="-"; \
 		if printf '%s\n' $(VERCEL_PROJECTS) | grep -Fxq "$$project"; then \
@@ -170,21 +176,24 @@ dev-all:
 	@echo ""
 	@echo "=== DEV ALL ==="
 	@echo ""
-	@for project in $(PROJECTS); do \
+	@FAILED=0; PIDS=""; \
+	for project in $(PROJECTS); do \
 		$(MAKE) --no-print-directory dev-project PROJECT="$$project" & \
+		PIDS="$$PIDS $$!"; \
 	done; \
-	wait
+	for pid in $$PIDS; do wait $$pid || FAILED=$$((FAILED+1)); done; \
+	echo ""; echo "DEV TERMINÉ — $$FAILED échec(s)"; \
+	test "$$FAILED" -eq 0
 
 dev-project:
 	@project="$(PROJECT)"; \
-	key=$$(echo "$$project" | tr '[:lower:].-' '[:upper:]__'); \
-	port=$$(grep "^$${key}_PORT=" "$(ROOT)/.env" | cut -d= -f2); \
+	port="$(PROJECT_PORT_$(PROJECT))"; \
 	if [ -z "$$port" ]; then echo "ERROR: projet inconnu ou port absent: $$project"; exit 1; fi; \
 	mkdir -p "$(ROOT)/.logs"; \
 	echo "DEV: $$project → port $$port"; \
 	if printf '%s\n' $(STATIC_PROJECTS) | grep -Fxq "$$project"; then \
 		cd "$(PROJECT_DIR)" && setsid nohup npx serve . -l "$$port" --no-clipboard > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
-	elif [ "$$project" = "wwdc26Bingo" ]; then \
+	elif { [ "$$project" = "wwdc26Bingo" ] || [ "$$project" = "wwdc26-bingo" ]; }; then \
 		cd "$(PROJECT_DIR)" && setsid nohup env PORT="$$port" BASE_PATH=/ pnpm --filter @workspace/wwdc26-bingo run dev > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
 	elif [ "$$project" = "oraneCoatch" ]; then \
 		cd "$(PROJECT_DIR)" && setsid nohup pnpm run dev --host 0.0.0.0 --port "$$port" > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
@@ -210,10 +219,14 @@ start-all:
 	@echo ""
 	@echo "=== START ALL ==="
 	@echo ""
-	@for project in $(PROJECTS); do \
+	@FAILED=0; PIDS=""; \
+	for project in $(PROJECTS); do \
 		$(MAKE) --no-print-directory start-project PROJECT="$$project" & \
+		PIDS="$$PIDS $$!"; \
 	done; \
-	wait
+	for pid in $$PIDS; do wait $$pid || FAILED=$$((FAILED+1)); done; \
+	echo ""; echo "START TERMINÉ — $$FAILED échec(s)"; \
+	test "$$FAILED" -eq 0
 
 start-project:
 	@project="$(PROJECT)"; \
@@ -223,10 +236,14 @@ start-project:
 	echo "START: $$project → port $$port"; \
 	if printf '%s\n' $(STATIC_PROJECTS) | grep -Fxq "$$project"; then \
 		cd "$(PROJECT_DIR)" && setsid nohup npx serve . -l "$$port" --no-clipboard > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
-	elif [ "$$project" = "wwdc26Bingo" ]; then \
+	elif { [ "$$project" = "wwdc26Bingo" ] || [ "$$project" = "wwdc26-bingo" ]; }; then \
 		cd "$(PROJECT_DIR)" && setsid nohup env PORT="$$port" BASE_PATH=/ pnpm --filter @workspace/wwdc26-bingo run serve > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
 	elif [ "$$project" = "oraneCoatch" ]; then \
 		cd "$(PROJECT_DIR)" && setsid nohup env PORT="$$port" pnpm run dev --host 0.0.0.0 --port "$$port" > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
+	elif printf '%s\n' $(CUSTOM_WEB_PROJECTS) | grep -Fxq "$$project"; then \
+		startcmd=$$($(SRVCTL) get-start "$$project") || exit 1; \
+		if [ -z "$$startcmd" ]; then echo "ERROR: projet custom $$project sans commande start dans le registre (srvctl/projects.json)"; exit 1; fi; \
+		cd "$(PROJECT_DIR)" && PORT="$$port" setsid nohup bash -c "$$startcmd" > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
 	elif printf '%s\n' $(VITE_PREVIEW_PROJECTS) | grep -Fxq "$$project"; then \
 		cd "$(PROJECT_DIR)" && setsid nohup env PORT="$$port" pnpm exec vite preview --host 0.0.0.0 --port "$$port" --strictPort > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
 	else \
@@ -256,6 +273,7 @@ stop-project:
 	@project="$(PROJECT)"; \
 	port="$(PROJECT_PORT_$(PROJECT))"; \
 	if [ -z "$$port" ]; then echo "ERROR: projet inconnu ou port absent: $$project"; exit 1; fi; \
+	if ! command -v fuser >/dev/null 2>&1; then echo "ERROR: 'fuser' introuvable (sudo apt install psmisc)"; exit 1; fi; \
 	echo "STOP: $$project → port $$port"; \
 	fuser -k "$$port/tcp" 2>/dev/null || true
 
@@ -277,10 +295,11 @@ status-all:
 	@echo ""
 	@echo "=== STATUS ALL ==="
 	@echo ""
+	@command -v ss >/dev/null 2>&1 || { echo "ERROR: 'ss' introuvable (sudo apt install iproute2)"; exit 1; }
 	@printf "%-28s %-6s %-6s\n" "PROJET" "PORT" "ETAT"
 	@printf "%-28s %-6s %-6s\n" "----------------------------" "------" "------"
 	@for project in $(PROJECTS); do \
-		port="$$(make --no-print-directory -s print-project-port PROJECT="$$project")"; \
+		port="$$($(MAKE) --no-print-directory -s print-project-port PROJECT="$$project")"; \
 		if [ -z "$$port" ]; then \
 			printf "%-28s %-6s %-6s\n" "$$project" "-" "ERROR"; \
 		elif ss -ltn | grep -q ":$$port "; then \
@@ -294,6 +313,7 @@ print-project-port:
 	@eval "printf '%s' '$(PROJECT_PORT_$(PROJECT))'"
 
 status-project:
+	@command -v ss >/dev/null 2>&1 || { echo "ERROR: 'ss' introuvable (sudo apt install iproute2)"; exit 1; }
 	@project="$(PROJECT)"; \
 	port="$(PROJECT_PORT_$(PROJECT))"; \
 	if [ -z "$$port" ]; then \
@@ -359,7 +379,7 @@ test-project:
 	project="$(PROJECT)"; \
 	echo ""; \
 	echo "=== TEST: $$project ==="; \
-	if [ "$$project" = "wwdc26Bingo" ]; then \
+	if { [ "$$project" = "wwdc26Bingo" ] || [ "$$project" = "wwdc26-bingo" ]; }; then \
 		cd "$(PROJECT_DIR)" && CI=true PORT=5188 BASE_PATH=/ pnpm test; \
 		if [ $$? -eq 0 ]; then printf "%s\tOK\n" "$$project" >> "$(ROOT)/.logs/test-results.tsv"; \
 		else printf "%s\tECHEC\n" "$$project" >> "$(ROOT)/.logs/test-results.tsv"; exit 1; fi; \
@@ -412,7 +432,7 @@ build-project:
 	project="$(PROJECT)"; \
 	echo ""; \
 	echo "=== BUILD: $$project ==="; \
-	if [ "$$project" = "wwdc26Bingo" ]; then \
+	if { [ "$$project" = "wwdc26Bingo" ] || [ "$$project" = "wwdc26-bingo" ]; }; then \
 		cd "$(PROJECT_DIR)" && CI=true PORT=5188 BASE_PATH=/ pnpm build; \
 		if [ $$? -eq 0 ]; then printf "%s\tOK\n" "$$project" >> "$(ROOT)/.logs/build-results.tsv"; \
 		else printf "%s\tECHEC\n" "$$project" >> "$(ROOT)/.logs/build-results.tsv"; exit 1; fi; \
