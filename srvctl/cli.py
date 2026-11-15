@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import secrets
 import sys
 
@@ -16,10 +17,14 @@ from .discovery import (
 from .gitgh import detect_git_remote, init_git_and_github_repo
 from .srvctl import (
     PROJECT_TYPES,
+    REGISTRY_FILE,
     get_root,
     load_registry,
     make_entry,
+    pid_file,
+    process_exists,
     project_path,
+    read_pid,
     root_path,
     save_registry,
     start_command,
@@ -45,10 +50,15 @@ def env_key(name: str) -> str:
     return "".join(out)
 
 
-def _sync_env(projects: list[dict]) -> None:
+ENV_HEADER = "# Projet        Port   Type"
+_ENV_HEADER_RE = re.compile(r"^#\s*Projet\s+Port\s+Type\s*$")
+
+
+def _sync_env(projects: list[dict], removed: list[dict] | None = None) -> None:
     """Synchronise les variables PORT/TYPE depuis projects.json.
 
-    Les autres variables de .env sont conservées.
+    Les variables PORT/TYPE des projets retirés du registre (`removed`)
+    sont supprimées ; les autres variables de .env sont conservées.
     """
     env_path = get_root() / ".env"
 
@@ -84,6 +94,11 @@ def _sync_env(projects: list[dict]) -> None:
         for suffix in ("PORT", "TYPE")
     }
 
+    for entry in removed or []:
+        key = env_key(entry["name"])
+        legacy_keys.add(f"{key}_PORT")
+        legacy_keys.add(f"{key}_TYPE")
+
     output = []
 
     for line in existing_lines:
@@ -96,9 +111,18 @@ def _sync_env(projects: list[dict]) -> None:
             if key in canonical_keys:
                 continue
 
-            # Suppression des anciens PORT/TYPE connus.
+            # Suppression des anciens PORT/TYPE connus et des projets retirés.
             if key in legacy_keys:
                 continue
+
+        # L'en-tête est réécrit plus bas : on ne garde pas les anciens
+        # (ils s'accumulaient à chaque synchronisation).
+        if _ENV_HEADER_RE.match(stripped):
+            continue
+
+        # Pas plus d'une ligne vide d'affilée
+        if not stripped and output and not output[-1].strip():
+            continue
 
         output.append(line)
 
@@ -108,7 +132,7 @@ def _sync_env(projects: list[dict]) -> None:
     if output:
         output.append("")
 
-    output.append("# Projet        Port   Type")
+    output.append(ENV_HEADER)
     output.append("")
 
     for entry in projects:
@@ -140,18 +164,21 @@ def _start_for(ptype: str, port: int) -> str:
 def cmd_sync(args: argparse.Namespace) -> None:
     """Synchronise les dossiers physiques vers le registre.
 
-    Sync est strictement non destructif :
-    - ne supprime aucun projet du registre ;
+    Sync ne touche jamais aux fichiers :
+    - retire du registre les projets dont le dossier n'existe plus
+      (sauf --keep-missing, ou si la racine entière est introuvable :
+      disque non monté, etc.) ;
     - ne supprime, ne déplace et ne modifie aucun dossier ;
     - ne crée, ne renomme et ne modifie aucun dépôt GitHub ;
     - détecte automatiquement type, port et remote GitHub des nouveaux projets ;
-    - met à jour uniquement les métadonnées détectables (root, vercel, remote) ;
-    - conserve type, port, start, status, priority, description et notes ;
+    - met à jour uniquement les métadonnées détectables (root, path, remote) ;
+    - conserve type, port, start, vercel, status, priority, description et notes ;
     - ignore les doublons de nom normalisé.
     """
     reg = load_registry()
     added: list[dict] = []
     updated: list[dict] = []
+    removed: list[dict] = []
 
     existing_by_normalized = {
         normalize_project_name(name): entry
@@ -176,8 +203,15 @@ def cmd_sync(args: argparse.Namespace) -> None:
                     existing["root"] = root
                     changes.append(f"root={root}")
 
-                detected_vercel = root == "projects"
-                if existing.get("vercel") != detected_vercel:
+                # Dossier déplacé ou renommé (casse) : le chemin suit
+                if existing.get("path") != str(project_dir):
+                    existing["path"] = str(project_dir)
+                    changes.append(f"path={project_dir}")
+
+                # Le choix Vercel d'un projet existant est conservé : seul un
+                # champ absent reçoit la valeur par défaut (root == "projects").
+                if "vercel" not in existing:
+                    detected_vercel = root == "projects"
                     existing["vercel"] = detected_vercel
                     existing["vercel_enabled"] = detected_vercel
                     changes.append(f"vercel={detected_vercel}")
@@ -229,11 +263,35 @@ def cmd_sync(args: argparse.Namespace) -> None:
             if ptype == "custom":
                 print(f"  ! {dirname}: type custom — renseigne le champ `start` dans projects.json")
 
-    changed = bool(added or updated)
+    # Projets dont le dossier a disparu : retirés du registre (pas des disques).
+    if not args.keep_missing:
+        for name, entry in list(reg.items()):
+            path = project_path(entry)
+            if path.is_dir():
+                continue
+
+            # Racine entière absente (disque non monté, renommage du dossier
+            # parent...) : on ne vide pas le registre pour autant.
+            if not path.parent.is_dir():
+                print(f"? {name}: racine {path.parent} introuvable — projet conservé")
+                continue
+
+            del reg[name]
+            removed.append(entry)
+
+            pid = read_pid(entry)
+            if pid and process_exists(pid):
+                print(f"- {name}: dossier {path} introuvable, retiré du registre "
+                      f"(processus {pid} encore actif : kill {pid})")
+            else:
+                pid_file(entry).unlink(missing_ok=True)
+                print(f"- {name}: dossier {path} introuvable, retiré du registre")
+
+    changed = bool(added or updated or removed)
 
     if changed:
         save_registry(reg)
-        _sync_env(list(reg.values()))
+        _sync_env(list(reg.values()), removed)
         _write_mk()
 
         print()
@@ -241,8 +299,12 @@ def cmd_sync(args: argparse.Namespace) -> None:
             print(f"{len(added)} projet(s) ajouté(s).")
         if updated:
             print(f"{len(updated)} projet(s) mis à jour.")
+        if removed:
+            print(f"{len(removed)} projet(s) retiré(s) du registre (dossier introuvable).")
         print("Aucun dossier ni dépôt GitHub modifié.")
     else:
+        if not REGISTRY_FILE.exists():
+            save_registry(reg)
         _sync_env(list(reg.values()))
         _write_mk()
         print("Rien de nouveau à synchroniser.")
@@ -308,6 +370,15 @@ def cmd_status(args: argparse.Namespace) -> None:
         git_str = "pas-git" if not gs.get("tracked") else ("modifie" if gs.get("dirty") else "propre")
         vercel_str = "-" if not p.get("vercel") else ("lie" if is_linked(project_dir) else "non-lie")
         print(f"{p['name']:<14} {str(port or '-'):<6} {('UP' if up else 'DOWN'):<6} {git_str:<10} {vercel_str}")
+
+
+def cmd_get_start(args: argparse.Namespace) -> None:
+    """Affiche la commande `start` d'un projet (utilisée par make start pour les projets custom)."""
+    entry = load_registry().get(args.name)
+    if entry is None:
+        print(f"Projet inconnu : {args.name}", file=sys.stderr)
+        raise SystemExit(1)
+    print(entry.get("start") or "")
 
 
 def cmd_generate_mk(args: argparse.Namespace) -> None:
@@ -394,10 +465,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="srvctl", description="Gestion automatisée des projets sous /srv")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_sync = sub.add_parser("sync", help="Scanne projects/personal et enregistre les nouveaux projets")
+    p_sync = sub.add_parser("sync", help="Scanne projects/personal, enregistre les nouveaux projets et retire ceux dont le dossier a disparu")
     p_sync.add_argument("--no-git", action="store_true", help="Ne pas faire git init / gh repo create")
     p_sync.add_argument("--no-vercel", action="store_true", help="Ne pas faire vercel link")
     p_sync.add_argument("--visibility", choices=["public", "private"], default="public")
+    p_sync.add_argument("--keep-missing", action="store_true",
+                        help="Garder dans le registre les projets dont le dossier a disparu")
     p_sync.set_defaults(func=cmd_sync)
 
     p_add = sub.add_parser("add", help="Ajoute explicitement un projet déjà présent sur disque")
@@ -423,6 +496,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser("status", help="Statut live (port up/down, git, vercel)")
     p_status.set_defaults(func=cmd_status)
+
+    p_start = sub.add_parser("get-start", help="Affiche la commande start d'un projet")
+    p_start.add_argument("name")
+    p_start.set_defaults(func=cmd_get_start)
 
     p_mk = sub.add_parser("generate-mk", help="Génère .projects.mk sur stdout")
     p_mk.set_defaults(func=cmd_generate_mk)

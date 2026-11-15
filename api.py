@@ -153,6 +153,6 @@ def list_deployments(
     return journal.list_deployments(project=project, environment=environment, limit=limit)
 
 
-@secured.post("/sync", response_model=ActivityDetailOut, summary="Scanner /srv et enregistrer les nouveaux projets")
+@secured.post("/sync", response_model=ActivityDetailOut, summary="Scanner /srv : enregistrer les nouveaux projets, retirer ceux dont le dossier a disparu")
 def sync(source: str = Depends(client_name)) -> dict:
     return services.sync(source=source, wait=True)

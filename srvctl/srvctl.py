@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 # Le dépôt est autonome : tout est relatif à ce fichier, plus aucun chemin
-# /srv/dashboard en dur. Le registre vit à côté du code (projects.json) ;
+# /srv/Dashboard en dur. Le registre vit à côté du code (projects.json) ;
 # SRV_REGISTRY permet de le surcharger (tests, déploiement ailleurs).
 BASE_DIR = Path(__file__).resolve().parent
 REGISTRY_FILE = Path(os.environ.get("SRV_REGISTRY") or BASE_DIR / "projects.json")
@@ -24,10 +24,23 @@ SERVER_ROOT = Path(os.environ.get("SRV_ROOT") or "/srv")
 
 # Nom de la racine logique -> dossier réel sous SERVER_ROOT.
 # Attention : sous Linux la casse compte, le dossier est /srv/Neron.
+def _find_dir(name):
+    """Dossier réel sous SERVER_ROOT, insensible à la casse : « projects »
+    trouve /srv/Projects, « neron » trouve /srv/Neron. Si rien n'existe
+    encore, on garde le nom tel quel (le dossier sera créé avec cette casse)."""
+    exact = SERVER_ROOT / name
+    if exact.exists() or not SERVER_ROOT.is_dir():
+        return exact
+    for entry in SERVER_ROOT.iterdir():
+        if entry.is_dir() and entry.name.lower() == name.lower():
+            return entry
+    return exact
+
+
 ROOT_DIRS = {
-    "projects": SERVER_ROOT / "projects",
-    "personal": SERVER_ROOT / "personal",
-    "neron": SERVER_ROOT / "Neron",
+    "projects": _find_dir("projects"),
+    "personal": _find_dir("personal"),
+    "neron": _find_dir("Neron"),
 }
 
 # Plages de ports par racine (le port du dashboard est exclu, voir next_free_port).

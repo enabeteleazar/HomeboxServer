@@ -10,12 +10,12 @@ Outillage complet du serveur `/srv` : le Makefile, la couche Python `srvctl`, le
 
 ## Comment ça s'installe
 
-Le dépôt se clone dans `<racine>/dashboard`, et un lien symbolique met le Makefile à la racine pour garder l'habitude `cd /srv && make list` :
+Le dépôt se clone dans `<racine>/Dashboard` (le nom du dossier est libre : le Makefile et le code se repèrent par rapport à leur propre emplacement ; seule l'unité systemd contient le chemin), et un lien symbolique met le Makefile à la racine pour garder l'habitude `cd /srv && make list` :
 
 ```
 /srv/
-├── Makefile -> dashboard/Makefile   lien symbolique
-├── dashboard/                       ce dépôt
+├── Makefile -> Dashboard/Makefile   lien symbolique
+├── Dashboard/                       ce dépôt
 │   └── srvctl/projects.json         registre des projets, source de vérité (données, hors dépôt)
 ├── .env                             ports + DASHBOARD_API_TOKEN (jamais versionné)
 ├── .projects.mk .data/ .logs/       généré : listes Make, journal SQLite, logs
@@ -26,10 +26,10 @@ Sur une machine neuve :
 
 ```bash
 sudo mkdir -p /srv && cd /srv
-git clone git@github.com:NABET/srv-dashboard.git dashboard
-ln -s dashboard/Makefile Makefile
-pip install -r dashboard/requirements.txt --break-system-packages
-make sync            # scanne projects/ personal/ et crée srvctl/projects.json
+git clone git@github.com:NABET/srv-dashboard.git Dashboard
+ln -s Dashboard/Makefile Makefile
+pip install -r Dashboard/requirements.txt --break-system-packages
+make sync            # scanne projects/ personal/, met à jour srvctl/projects.json
 make api-token       # jeton de l'API pour Neron
 make dashboard       # ou l'unité systemd, voir plus bas
 ```
@@ -37,6 +37,8 @@ make dashboard       # ou l'unité systemd, voir plus bas
 Ailleurs que dans `/srv`, une seule variable suffit — le Makefile et `srvctl` lisent la même : `SRV_ROOT=/opt/srv make list` (et `Environment=SRV_ROOT=/opt/srv` dans l'unité systemd). Le registre, lui, suit le dépôt ; `SRV_REGISTRY=/chemin/projects.json` permet de le placer ailleurs (tests, déploiement particulier). Sous Linux la casse compte : la racine logique `neron` correspond au dossier `/srv/Neron`.
 
 Première installation sur un `/srv` déjà peuplé : `make sync` puis `python3 -m srvctl.cli import-env` récupère les ports déjà en service depuis le `.env` existant. Les champs de suivi (`status`, `priority`, `description`, `notes`) sont facultatifs dans le registre : une entrée qui ne les contient pas reste valide, le projet démarre en « actif / priorité normale ».
+
+À chaque `make sync`, un projet dont le dossier n'existe plus est retiré du registre (et ses variables `<NOM>_PORT` / `<NOM>_TYPE` du `.env`) ; un projet déplacé d'une racine à l'autre voit simplement son chemin mis à jour. Rien n'est supprimé sur le disque ni sur GitHub/Vercel. Garde-fous : si la racine entière est introuvable (disque non monté), ses projets sont conservés ; `make sync ARGS=--keep-missing` désactive le retrait.
 
 ## Le registre des projets
 
@@ -97,7 +99,7 @@ Ce qui n'apparaît pas dans le journal : les commandes lancées directement en S
 `make dashboard` tourne au premier plan et meurt avec la session SSH. L'unité fournie dans `systemd/srv-dashboard.service` le lance au démarrage de homebox et le relance en cas de plantage :
 
 ```bash
-sudo cp /srv/dashboard/systemd/srv-dashboard.service /etc/systemd/system/
+sudo cp /srv/Dashboard/systemd/srv-dashboard.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now srv-dashboard
 systemctl status srv-dashboard
@@ -137,7 +139,7 @@ Tant qu'aucun jeton n'est configuré, l'API répond `503` (jamais ouverte par d�
 | GET | `/projects/{nom}/logs` | fin du log du service |
 | GET | `/activity`, `/activity/{id}` | journal, et sortie complète d'une action |
 | GET | `/deployments` | historique Vercel avec URLs |
-| POST | `/sync` | scanner `/srv` et enregistrer les nouveaux dossiers |
+| POST | `/sync` | scanner `/srv`, enregistrer les nouveaux dossiers et retirer les projets dont le dossier a disparu |
 
 `POST /actions` accepte `{"action": "deploy", "wait": false}` : la réponse est immédiate (`202`) avec une activité `running` à suivre via `/activity/{id}`, ou `wait: true` pour attendre la fin (`200`). Codes d'erreur utiles : `409` action déjà en cours sur ce projet, `400` projet non éligible Vercel, `404` projet inconnu, `422` action ou champ invalide.
 

@@ -140,7 +140,7 @@ def project_view(
             "changes": gs.get("changes") or 0,
         },
         "has_log": (
-            Path("/srv/dashboard/srvctl/logs") /
+            BASE_DIR / "srvctl" / "logs" /
             f"{name}.log"
         ).exists(),
         "last_activity": last_activity,
@@ -178,7 +178,7 @@ def get_project(name: str, host: Optional[str] = None) -> dict:
 
 def read_logs(name: str, lines: int = 200) -> str:
     _entry_or_404(name)
-    log_path = Path("/srv/dashboard/srvctl/logs") / f"{name}.log"
+    log_path = BASE_DIR / "srvctl" / "logs" / f"{name}.log"
     if not log_path.exists():
         return ""
     content = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -210,7 +210,7 @@ def _child_env() -> dict:
     """Environnement des commandes lancées (make, srvctl) : la racine du
     serveur et le dossier du dépôt, pour que `python3 -m srvctl.cli`
     fonctionne alors qu'on s'exécute depuis /srv et que srvctl vit dans
-    /srv/dashboard."""
+    le dossier du dépôt (BASE_DIR)."""
     env = os.environ.copy()
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = f"{BASE_DIR}{os.pathsep}{existing}" if existing else str(BASE_DIR)
@@ -265,14 +265,14 @@ def _execute_action(
         if action in ("start", "stop", "restart"):
             cmd = [
                 sys.executable,
-                str(BASE_DIR / "srvctl.py"),
+                str(BASE_DIR / "srvctl" / "srvctl.py"),
                 action,
                 name,
             ]
         elif action == "dev":
             cmd = [
                 sys.executable,
-                str(BASE_DIR / "srvctl.py"),
+                str(BASE_DIR / "srvctl" / "srvctl.py"),
                 "start",
                 name,
             ]
@@ -364,7 +364,8 @@ def sync(source: str = "dashboard", wait: bool = True) -> dict:
         code, output = _run(
             [
                 sys.executable,
-                str(BASE_DIR / "srvctl.py"),
+                "-m",
+                "srvctl.cli",
                 "sync",
             ],
             timeout=900,
