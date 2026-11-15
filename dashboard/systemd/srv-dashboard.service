@@ -1,6 +1,6 @@
 [Unit]
 Description=Dashboard /srv — suivi des projets et API pour Neron
-Documentation=file:///srv/Dashboard/README.md
+Documentation=file:///srv/HomeboxServer/dashboard/README.md
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=exec
 User=eleazar
 Group=eleazar
-WorkingDirectory=/srv/Dashboard
+WorkingDirectory=/srv/HomeboxServer/dashboard
 
 # Même interpréteur que `make dashboard` : le venv du dépôt (fastapi, uvicorn…).
 Environment=SRV_ROOT=/srv
@@ -18,7 +18,7 @@ Environment=PYTHONUNBUFFERED=1
 # de pnpm, npx, vercel et gh sous le HOME d'eleazar. À ajuster si
 # `command -v pnpm npx vercel gh` (voir README) en trouve ailleurs.
 Environment=PATH=/home/eleazar/.local/bin:/home/eleazar/.local/share/pnpm/bin:/home/eleazar/.local/share/pnpm:/home/eleazar/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/srv/Dashboard/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port ${DASHBOARD_PORT}
+ExecStart=/srv/HomeboxServer/dashboard/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port ${DASHBOARD_PORT}
 
 Restart=on-failure
 RestartSec=3

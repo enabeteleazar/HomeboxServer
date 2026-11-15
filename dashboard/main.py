@@ -433,7 +433,7 @@ def _root_command(key: str, label: str) -> tuple[bool, str]:
     if ok:
         return True, label
     if "password" in output or "not allowed" in output or "interactive" in output:
-        return False, "Le dashboard n'a pas encore ce droit : cd /srv/Projects/HomeboxServer && make tools"
+        return False, "Le dashboard n'a pas encore ce droit : cd /srv/HomeboxServer && make tools"
     return False, f"Échec : {output[:200]}"
 
 

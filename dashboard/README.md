@@ -10,29 +10,30 @@ Outillage complet du serveur `/srv` : le Makefile, la couche Python `srvctl`, le
 
 ## Comment ça s'installe
 
-Le dépôt se clone dans `<racine>/Dashboard` (le nom du dossier est libre : le Makefile et le code se repèrent par rapport à leur propre emplacement ; seule l'unité systemd contient le chemin), et un lien symbolique met le Makefile à la racine pour garder l'habitude `cd /srv && make list` :
+Ce dossier est la partie **dashboard** du dépôt HomeboxServer (`/srv/HomeboxServer/dashboard`), à côté de la partie **infra/** (scripts root, sauvegardes, pare-feu) qu'il affiche et pilote. Un lien symbolique met son Makefile à la racine de `/srv` pour garder l'habitude `cd /srv && make list` :
 
 ```
 /srv/
-├── Makefile -> Dashboard/Makefile   lien symbolique
-├── Dashboard/                       ce dépôt
-│   └── srvctl/projects.json         registre des projets, source de vérité (données, hors dépôt)
-├── .env                             ports + DASHBOARD_API_TOKEN (jamais versionné)
-├── .projects.mk .data/ .logs/       généré : listes Make, journal SQLite, logs
-└── projects/ personal/ Neron/       les projets, chacun avec son propre dépôt git
+├── Makefile -> HomeboxServer/dashboard/Makefile   lien symbolique
+├── HomeboxServer/                                 ce dépôt
+│   ├── dashboard/                                 l'application (ici)
+│   │   └── srvctl/projects.json                   registre des projets (données, hors dépôt)
+│   └── infra/                                     scripts root, outils homebox-*
+├── .env                                           ports + DASHBOARD_API_TOKEN (jamais versionné)
+├── .projects.mk .data/ .logs/                     généré : listes Make, journal SQLite, logs
+└── Projects/ Neron/                               les projets, chacun avec son propre dépôt git
 ```
 
-Sur une machine neuve :
+Sur une machine neuve, voir le README à la racine du dépôt ; pour le dashboard seul :
 
 ```bash
-sudo mkdir -p /srv && cd /srv
-git clone git@github.com:NABET/srv-dashboard.git Dashboard
-ln -s Dashboard/Makefile Makefile
-pip install -r Dashboard/requirements.txt --break-system-packages
-make sync            # scanne projects/ personal/, met à jour srvctl/projects.json
+cd /srv && git clone git@github.com:enabeteleazar/HomeboxServer.git
+ln -s HomeboxServer/dashboard/Makefile Makefile
+python3 -m venv HomeboxServer/dashboard/.venv
+HomeboxServer/dashboard/.venv/bin/pip install -r HomeboxServer/dashboard/requirements.txt
+make sync            # scanne Projects/ personal/, met à jour srvctl/projects.json
 make api-token       # jeton de l'API pour Neron
-make dashboard-password   # mot de passe de l'interface web (obligatoire)
-make dashboard       # ou l'unité systemd, voir plus bas
+make dashboard-password
 ```
 
 Ailleurs que dans `/srv`, une seule variable suffit — le Makefile et `srvctl` lisent la même : `SRV_ROOT=/opt/srv make list` (et `Environment=SRV_ROOT=/opt/srv` dans l'unité systemd). Le registre, lui, suit le dépôt ; `SRV_REGISTRY=/chemin/projects.json` permet de le placer ailleurs (tests, déploiement particulier). Sous Linux la casse compte : la racine logique `neron` correspond au dossier `/srv/Neron`.
@@ -109,15 +110,15 @@ Pages rafraîchies en direct (en pause quand l'onglet est caché) :
 | Pare-feu | état UFW, exposition réelle de chaque port, règles, fail2ban | à la demande |
 | Historique | graphiques CPU, mémoire, température, charge, débit et occupation du disque, réseau (1 h à 90 jours, moyenne et pic) ; tendance de remplissage des partitions et date estimée où elles seraient pleines | 1 min |
 
-**Sauvegardes, alertes, sécurité** : réservées à root, elles sont lues dans `/var/lib/homebox/status.json`, écrit sans aucun secret toutes les 15 min par `homebox-healthcheck` + `homebox-status` (kit HomeboxServer). Le contrôle de santé y ajoute des seuils soutenus (CPU, RAM, swap, température en moyenne sur 15 min, d'après l'historique) et l'expiration des certificats HTTPS ; il envoie les alertes sur ntfy. Le dashboard peut lancer une sauvegarde ou un contrôle (`sudo systemctl start --no-block …`, seules commandes autorisées avec homebox-firewall).
+**Sauvegardes, alertes, sécurité** : réservées à root, elles sont lues dans `/var/lib/homebox/status.json`, écrit sans aucun secret toutes les 15 min par `homebox-healthcheck` + `homebox-status` (dossier infra/). Le contrôle de santé y ajoute des seuils soutenus (CPU, RAM, swap, température en moyenne sur 15 min, d'après l'historique) et l'expiration des certificats HTTPS ; il envoie les alertes sur ntfy. Le dashboard peut lancer une sauvegarde ou un contrôle (`sudo systemctl start --no-block …`, seules commandes autorisées avec homebox-firewall).
 
 **Projets** : CPU, mémoire et temps de réponse HTTP de chaque projet en ligne (liste et fiche projet).
 
 **Historique** : un collecteur intégré au dashboard prend une mesure toutes les 15 s dans `<SRV_ROOT>/.data/metrics.db` (7 jours de mesures détaillées, 90 jours de résumés horaires, 1 an de remplissage des partitions). Un verrou garantit un seul collecteur même si le dashboard est lancé deux fois.
 
-**Santé du disque (SMART)** : relevée toutes les heures par `homebox-smart` (kit HomeboxServer, root) dans `/var/lib/homebox/smart.json`, affichée sur la page Système ; les dégradations (secteurs réalloués ou en attente en hausse, auto-test échoué, panne annoncée) déclenchent une alerte ntfy via `homebox-healthcheck`.
+**Santé du disque (SMART)** : relevée toutes les heures par `homebox-smart` (dossier infra/, root) dans `/var/lib/homebox/smart.json`, affichée sur la page Système ; les dégradations (secteurs réalloués ou en attente en hausse, auto-test échoué, panne annoncée) déclenchent une alerte ntfy via `homebox-healthcheck`.
 
-Tout est lu sans droits root (psutil, docker, systemctl), sauf le pare-feu qui passe par `homebox-firewall` (kit HomeboxServer, `make tools`). Les mêmes données sont exposées à Neron : `GET /api/v1/system`, `/docker`, `/services`, `/firewall`, `/metrics?range=24h`, `/overview`.
+Tout est lu sans droits root (psutil, docker, systemctl), sauf le pare-feu qui passe par `homebox-firewall` (dossier infra/, `make tools`). Les mêmes données sont exposées à Neron : `GET /api/v1/system`, `/docker`, `/services`, `/firewall`, `/metrics?range=24h`, `/overview`.
 
 ### Connexion à l'interface web
 
@@ -138,7 +139,7 @@ make dashboard-password     # définit ou change le mot de passe (saisie masqué
 `make dashboard` tourne au premier plan et meurt avec la session SSH. L'unité fournie dans `systemd/srv-dashboard.service` le lance au démarrage de homebox et le relance en cas de plantage :
 
 ```bash
-sudo cp /srv/Dashboard/systemd/srv-dashboard.service /etc/systemd/system/
+sudo cp /srv/HomeboxServer/dashboard/systemd/srv-dashboard.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now srv-dashboard
 systemctl status srv-dashboard

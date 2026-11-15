@@ -7,7 +7,7 @@ sauvegardes locales et externes, surveillance et alertes.
 ## Contenu
 
 ```
-HomeboxServer/              (/srv/Projects/HomeboxServer)
+infra/                       (/srv/HomeboxServer/infra)
 ├── install-node.sh        # 1. prépare la machine (outils, Docker, Caddy, pare-feu)
 ├── infra-docker.sh        # 2. bases de données, sauvegardes, surveillance (relançable)
 ├── firewall.sh            # pare-feu UFW (réseau local + Tailscale, Internet bloqué)

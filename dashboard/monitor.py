@@ -276,7 +276,7 @@ SMART_FILE = "/var/lib/homebox/smart.json"
 
 
 def smart() -> dict:
-    """Relevé SMART écrit toutes les heures par homebox-smart (kit HomeboxServer)."""
+    """Relevé SMART écrit toutes les heures par homebox-smart (dossier infra/)."""
     try:
         with open(SMART_FILE, encoding="utf-8") as f:
             data = json.load(f)
@@ -560,7 +560,7 @@ def summary() -> dict:
     }
 
 
-# --- état public écrit par homebox-status (kit HomeboxServer) ---------------
+# --- état public écrit par homebox-status (dossier infra/) ---------------
 
 STATUS_FILE = "/var/lib/homebox/status.json"
 

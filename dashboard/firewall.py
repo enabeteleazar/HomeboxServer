@@ -21,7 +21,7 @@ from typing import Optional
 from srvctl import journal
 
 HELPER = "/usr/local/sbin/homebox-firewall"
-SETUP_HINT = "cd /srv/Projects/HomeboxServer && make tools"
+SETUP_HINT = "cd /srv/HomeboxServer && make tools"
 
 # Services système connus (le nom du processus n'est visible qu'en root)
 KNOWN_PORTS = {

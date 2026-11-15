@@ -41,7 +41,7 @@
     <p class="auth-help">Le dashboard tourne sous ton utilisateur : il passe par le script <span class="mono">homebox-firewall</span>,
       seul programme qu'il a le droit de lancer en root. Pour l'installer, sur homebox :</p>
     <pre class="code mono">{{ fw.setup_hint }}
-sudo cp /srv/Dashboard/systemd/srv-dashboard.service /etc/systemd/system/
+sudo cp /srv/HomeboxServer/dashboard/systemd/srv-dashboard.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl restart srv-dashboard</pre>
     {% endif %}
   </div>

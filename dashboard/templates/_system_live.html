@@ -82,7 +82,7 @@
     {% if not sm.available %}
     <p class="auth-help">Pas encore de relevé : le dashboard n'a pas accès à <span class="mono">smartctl</span> (droits root).
       Installe le relevé automatique, sur homebox :</p>
-    <pre class="code mono">cd /srv/Projects/HomeboxServer && make tools</pre>
+    <pre class="code mono">cd /srv/HomeboxServer && make tools</pre>
     {% else %}
     {% if sm.stale %}<p class="flash flash-error">{{ ui.icon("alert") }}<span>Relevé ancien ({{ sm.generated_at|ago }}) : vérifie <span class="mono">homebox-smart.timer</span>.</span></p>{% endif %}
     {% for d in sm.disks %}

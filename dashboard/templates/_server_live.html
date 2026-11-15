@@ -20,7 +20,7 @@
   <div class="card-body">
     {% if not st.available %}
     <p class="auth-help">Le contrôle de santé (toutes les 15 min, en root) n'écrit pas encore son état pour le dashboard. Sur homebox :</p>
-    <pre class="code mono">cd /srv/Projects/HomeboxServer && make tools</pre>
+    <pre class="code mono">cd /srv/HomeboxServer && make tools</pre>
     {% elif st.issues %}
     <ul class="smart-findings">
       {% for issue in st.issues %}<li>{{ ui.level_pill("crit", "alerte") }} {{ issue }}</li>{% endfor %}

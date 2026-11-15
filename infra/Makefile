@@ -1,5 +1,5 @@
 # ==========================================================
-# HOMEBOX : raccourcis pour le kit HomeboxServer
+# HOMEBOX : raccourcis de la partie infra/ (voir aussi le Makefile à la racine)
 # Usage : make            (liste des commandes)
 #         make <cible> [VARIABLE=valeur]
 # ==========================================================
@@ -144,7 +144,11 @@ update: ## Sauvegarde puis applique les mises à jour d'images
 
 lint: ## Vérifie la syntaxe de tous les scripts du kit
 	@for f in *.sh files/bin/* files/lib/common.sh; do \
-		bash -n "$$f" && echo "ok      $$f" || { echo "ÉCHEC   $$f"; exit 1; }; \
+		if head -n1 "$$f" | grep -q python; then \
+			python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$$f"; \
+		else \
+			bash -n "$$f"; \
+		fi && echo "ok      $$f" || { echo "ÉCHEC   $$f"; exit 1; }; \
 	done
 
 # --- Projets (bases PostgreSQL) --------------------------------------
