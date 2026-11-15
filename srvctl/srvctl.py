@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 # Le dépôt est autonome : tout est relatif à ce fichier, plus aucun chemin
-# /srv/dashboard en dur. Le registre vit à côté du code (projects.json) ;
+# /srv/Dashboard en dur. Le registre vit à côté du code (projects.json) ;
 # SRV_REGISTRY permet de le surcharger (tests, déploiement ailleurs).
 BASE_DIR = Path(__file__).resolve().parent
 REGISTRY_FILE = Path(os.environ.get("SRV_REGISTRY") or BASE_DIR / "projects.json")

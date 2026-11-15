@@ -1,6 +1,6 @@
 """Dashboard /srv — interface web.
 
-Lancement : `make dashboard` (uvicorn main:app depuis /srv/dashboard).
+Lancement : `make dashboard` (uvicorn main:app depuis le dossier du dépôt).
 L'API JSON pour Neron vit dans api.py, la logique commune dans services.py.
 """
 from __future__ import annotations

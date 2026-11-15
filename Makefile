@@ -4,12 +4,16 @@ SHELL := /bin/bash
 #   SRV_ROOT=/opt/srv make list      (srvctl lit la même variable)
 ROOT ?= $(if $(SRV_ROOT),$(SRV_ROOT),/srv)
 
-# srvctl vit désormais DANS dashboard/ (le dépôt est autonome), d'où le
-# PYTHONPATH : le Makefile, lui, tourne depuis la racine du serveur.
-# Registre unique des projets (source de vérité), dans le dépôt : srvctl/projects.json.
-REGISTRY ?= $(ROOT)/dashboard/srvctl/projects.json
+# Dossier du dépôt, déduit de l'emplacement réel de ce Makefile (le lien
+# /srv/Makefile est suivi) : le dossier peut être renommé ou déplacé.
+DASHBOARD_DIR ?= $(patsubst %/,%,$(dir $(realpath $(firstword $(MAKEFILE_LIST)))))
 
-SRVCTL := SRV_ROOT="$(ROOT)" SRV_REGISTRY="$(REGISTRY)" PYTHONPATH="$(ROOT)/dashboard" "$(ROOT)/dashboard/.venv/bin/python" -m srvctl.cli
+# srvctl vit DANS le dépôt (il est autonome), d'où le PYTHONPATH :
+# le Makefile, lui, tourne depuis la racine du serveur.
+# Registre unique des projets (source de vérité), dans le dépôt : srvctl/projects.json.
+REGISTRY ?= $(DASHBOARD_DIR)/srvctl/projects.json
+
+SRVCTL := SRV_ROOT="$(ROOT)" SRV_REGISTRY="$(REGISTRY)" PYTHONPATH="$(DASHBOARD_DIR)" "$(DASHBOARD_DIR)/.venv/bin/python" -m srvctl.cli
 
 # PROJECTS, STATIC_PROJECTS, WEB_PROJECTS, CUSTOM_WEB_PROJECTS,
 # VERCEL_PROJECTS et PROJECT_DIR_<nom> sont générés par srvctl à partir
@@ -85,7 +89,7 @@ help:
 	@echo "  make deploy <project>     (déploiement Vercel preview)"
 	@echo "  make deploy-prod all      (mise en ligne Vercel production)"
 	@echo "  make deploy-prod <project> (mise en ligne Vercel production)"
-	@echo "  make sync                 (scanne /srv, enregistre les nouveaux projets)"
+	@echo "  make sync                 (scanne /srv, ajoute les nouveaux projets, retire les disparus)"
 	@echo "  make dashboard            (lance le dashboard web sur DASHBOARD_PORT)"
 	@echo "  make api-token            (jeton Bearer de l'API pour Neron)"
 	@echo ""
@@ -115,8 +119,8 @@ sync:
 # venv/paquets listés dans requirements.txt (fastapi, uvicorn, ...).
 dashboard:
 	@PORT=$${DASHBOARD_PORT:-5199}; \
-	PIDFILE="$(ROOT)/dashboard/dashboard.pid"; \
-	LOGFILE="$(ROOT)/dashboard/dashboard.log"; \
+	PIDFILE="$(DASHBOARD_DIR)/dashboard.pid"; \
+	LOGFILE="$(DASHBOARD_DIR)/dashboard.log"; \
 	EXISTING_PID=$$(ss -ltnp 2>/dev/null | awk -v port=":$$PORT" '$$4 ~ port"$$" && match($$0,/pid=[0-9]+/) {print substr($$0,RSTART+4,RLENGTH-4); exit}'); \
 	if [ -n "$$EXISTING_PID" ]; then \
 		echo "Dashboard déjà lancé — PID $$EXISTING_PID — http://0.0.0.0:$$PORT"; \
@@ -124,8 +128,8 @@ dashboard:
 	fi; \
 	rm -f "$$PIDFILE"; \
 	echo "Lancement du Dashboard en arrière-plan sur http://0.0.0.0:$$PORT"; \
-	cd "$(ROOT)/dashboard" && \
-	SRV_ROOT="$(ROOT)" nohup "$(ROOT)/dashboard/.venv/bin/python" -m uvicorn main:app --host 0.0.0.0 --port "$$PORT" >> "$$LOGFILE" 2>&1 & \
+	cd "$(DASHBOARD_DIR)" && \
+	SRV_ROOT="$(ROOT)" nohup "$(DASHBOARD_DIR)/.venv/bin/python" -m uvicorn main:app --host 0.0.0.0 --port "$$PORT" >> "$$LOGFILE" 2>&1 & \
 	PID=$$!; \
 	echo "$$PID" > "$$PIDFILE"; \
 	sleep 1; \
@@ -677,8 +681,8 @@ install-env-dev:
 		sudo apt-get install -y nodejs || exit 1; \
 	fi
 	sudo npm i -g pnpm vercel serve
-	@python3 -m venv "$(ROOT)/dashboard/.venv"
-	@"$(ROOT)/dashboard/.venv/bin/pip" install -q -r "$(ROOT)/dashboard/requirements.txt"
+	@python3 -m venv "$(DASHBOARD_DIR)/.venv"
+	@"$(DASHBOARD_DIR)/.venv/bin/pip" install -q -r "$(DASHBOARD_DIR)/requirements.txt"
 	@echo ""
 	@echo "Versions :"
 	@node -v; npm -v; pnpm -v; vercel --version; gh --version | head -1; caddy version
