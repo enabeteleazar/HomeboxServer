@@ -50,13 +50,13 @@ command -v ufw >/dev/null 2>&1 || { echo "UFW n'est pas installé (sudo apt inst
 # Détection
 # ----------------------------------------------------------
 
-SSH_PORT="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
+SSH_PORT="$(sshd -T 2>/dev/null | awk '$1 == "port" && !found {print $2; found = 1}' || true)"
 SSH_PORT="${SSH_PORT:-22}"
 
-LAN_IF="$(ip -4 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')"
+LAN_IF="$(ip -4 route show default | awk '!found {for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); found = 1; break}}' || true)"
 LAN_NET=""
 if [ -n "$LAN_IF" ]; then
-    LAN_NET="$(ip -4 route show dev "$LAN_IF" proto kernel scope link | awk 'NR == 1 {print $1}')"
+    LAN_NET="$(ip -4 route show dev "$LAN_IF" proto kernel scope link | awk 'NR == 1 {print $1}' || true)"
 fi
 
 HAS_TAILSCALE=false
