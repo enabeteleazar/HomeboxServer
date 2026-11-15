@@ -417,7 +417,7 @@ install_tools() {
     install -o root -g root -m 0644 "$FILES_DIR/lib/common.sh" "$LIB_DIR/common.sh"
 
     local tool
-    for tool in backup restore healthcheck notify offsite update site firewall; do
+    for tool in backup restore healthcheck notify offsite update site firewall smart; do
         install -o root -g root -m 0750 "$FILES_DIR/bin/homebox-$tool" "$SBIN_DIR/homebox-$tool"
     done
 
@@ -477,6 +477,12 @@ CONF
     if ! command -v restic >/dev/null 2>&1; then
         DEBIAN_FRONTEND=noninteractive apt-get install -y restic
     fi
+
+    # Santé des disques (homebox-smart). --no-install-recommends : pas de
+    # serveur de mail tiré par smartmontools, les alertes passent par ntfy.
+    if ! command -v smartctl >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends smartmontools
+    fi
 }
 
 # ==========================================================
@@ -494,7 +500,11 @@ install_systemd() {
     systemctl enable --now \
         homebox-backup.timer \
         homebox-healthcheck.timer \
-        homebox-restore-test.timer
+        homebox-restore-test.timer \
+        homebox-smart.timer
+
+    # Premier relevé SMART tout de suite (sans auto-test), pour le dashboard
+    "$SBIN_DIR/homebox-smart" --no-test || true
 }
 
 # ==========================================================

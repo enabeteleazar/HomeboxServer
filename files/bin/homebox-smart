@@ -1,0 +1,250 @@
+#!/usr/bin/python3 -I
+"""HOMEBOX SMART : santé des disques (smartctl), toutes les heures.
+
+Écrit /var/lib/homebox/smart.json (lisible par tous, sans secret) que lisent
+le dashboard et homebox-healthcheck. Garde l'état précédent pour repérer une
+dégradation (nouveaux secteurs réalloués ou en attente), conserve un relevé
+par jour (90 jours) et lance un auto-test court si le dernier a plus de 7 jours.
+
+  homebox-smart            relevé + auto-test hebdomadaire si besoin
+  homebox-smart --no-test  relevé seulement
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+
+STATE_DIR = "/var/lib/homebox"
+OUTPUT = os.path.join(STATE_DIR, "smart.json")
+STATE = os.path.join(STATE_DIR, "smart-state.json")
+ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
+SELFTEST_EVERY_HOURS = 7 * 24
+
+# Attributs ATA surveillés : id → (libellé, gravité si > 0)
+WATCHED = {
+    5: ("Secteurs réalloués", "warn"),
+    10: ("Relances de rotation", "warn"),
+    184: ("Erreurs de bout en bout", "crit"),
+    187: ("Erreurs non corrigées signalées", "warn"),
+    188: ("Délais de commande dépassés", "warn"),
+    196: ("Événements de réallocation", "warn"),
+    197: ("Secteurs en attente de réallocation", "crit"),
+    198: ("Secteurs illisibles hors ligne", "crit"),
+    199: ("Erreurs de transfert (câble)", "warn"),
+}
+INFO = {
+    9: "Heures de fonctionnement",
+    12: "Cycles d'alimentation",
+    193: "Cycles de parcage des têtes",
+    194: "Température",
+}
+# Attributs dont toute AUGMENTATION est une dégradation à signaler
+DEGRADATION = (5, 187, 196, 197, 198)
+
+
+def run(cmd: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=ENV)
+
+
+def smartctl_json(args: list[str]) -> dict:
+    out = run(["smartctl", "-j", *args])
+    try:
+        return json.loads(out.stdout or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+def scan() -> list[dict]:
+    data = smartctl_json(["--scan-open"])
+    devices = [d for d in data.get("devices", []) if d.get("name")]
+    return devices
+
+
+def worst(levels: list[str]) -> str:
+    order = ["ok", "info", "warn", "crit"]
+    return max(levels or ["ok"], key=order.index)
+
+
+def assess(name: str, info: dict, previous: dict) -> dict:
+    attrs = {}
+    for a in (info.get("ata_smart_attributes") or {}).get("table", []):
+        attrs[a.get("id")] = a
+
+    findings: list[dict] = []
+
+    def add(level: str, text: str) -> None:
+        findings.append({"level": level, "text": text})
+
+    passed = (info.get("smart_status") or {}).get("passed")
+    if passed is False:
+        add("crit", "Le disque annonce lui-même une panne imminente (SMART FAILED) : remplace-le.")
+
+    for a in attrs.values():
+        if a.get("when_failed") in ("now",):
+            add("crit", f"Attribut {a.get('name')} sous son seuil de panne.")
+
+    watched = []
+    for attr_id, (label, severity) in WATCHED.items():
+        a = attrs.get(attr_id)
+        if not a:
+            continue
+        raw = int((a.get("raw") or {}).get("value") or 0)
+        before = previous.get(str(attr_id))
+        watched.append({"id": attr_id, "label": label, "raw": raw, "previous": before,
+                        "value": a.get("value"), "worst": a.get("worst"), "thresh": a.get("thresh")})
+        if raw > 0:
+            add(severity, f"{label} : {raw}")
+        if attr_id in DEGRADATION and before is not None and raw > before:
+            add("crit", f"{label} en hausse : {before} → {raw} (le disque se dégrade, sauvegarde hors machine !)")
+
+    temperature = (info.get("temperature") or {}).get("current")
+    rotational = (info.get("rotation_rate") or 0) > 0
+    if temperature is not None:
+        limit_warn, limit_crit = (50, 60) if rotational else (60, 70)
+        if temperature >= limit_crit:
+            add("crit", f"Température du disque : {temperature} °C")
+        elif temperature >= limit_warn:
+            add("warn", f"Température du disque : {temperature} °C")
+
+    hours = (info.get("power_on_time") or {}).get("hours")
+    if hours and hours >= 40000:
+        add("info", f"{hours} heures de fonctionnement (≈ {hours // 8760} ans) : disque âgé, à surveiller")
+    load_cycles = (attrs.get(193) or {}).get("raw", {}).get("value")
+    if load_cycles and int(load_cycles) >= 300000:
+        add("warn" if int(load_cycles) >= 500000 else "info",
+            f"{load_cycles} cycles de parcage des têtes (usure des disques d'ordinateur portable)")
+
+    errors = ((info.get("ata_smart_error_log") or {}).get("summary") or {}).get("count") or 0
+    if errors:
+        add("warn", f"{errors} erreur(s) dans le journal SMART du disque")
+
+    tests = ((info.get("ata_smart_self_test_log") or {}).get("standard") or {}).get("table") or []
+    last_test = None
+    if tests:
+        t = tests[0]
+        status = t.get("status") or {}
+        last_test = {
+            "type": (t.get("type") or {}).get("string", ""),
+            "passed": status.get("passed", status.get("value") == 0),
+            "status": status.get("string", ""),
+            "lifetime_hours": t.get("lifetime_hours"),
+            "age_hours": (hours - t["lifetime_hours"]) if hours and t.get("lifetime_hours") is not None else None,
+        }
+        if last_test["passed"] is False:
+            add("crit", f"Dernier auto-test échoué : {last_test['status']}")
+
+    running = (info.get("ata_smart_data") or {}).get("self_test", {}).get("status", {})
+    test_running = "in progress" in (running.get("string") or "")
+
+    return {
+        "device": name,
+        "model": info.get("model_name") or info.get("model_family") or "?",
+        "family": info.get("model_family", ""),
+        "serial": info.get("serial_number", ""),
+        "capacity": (info.get("user_capacity") or {}).get("bytes"),
+        "rotational": rotational,
+        "rpm": info.get("rotation_rate") or None,
+        "smart_supported": bool((info.get("smart_support") or {}).get("available", True)),
+        "passed": passed,
+        "temperature": temperature,
+        "power_on_hours": hours,
+        "power_cycles": info.get("power_cycle_count"),
+        "load_cycles": int(load_cycles) if load_cycles is not None else None,
+        "watched": watched,
+        "info": [{"id": i, "label": INFO[i], "raw": int((attrs[i].get("raw") or {}).get("value") or 0)}
+                 for i in INFO if i in attrs],
+        "error_count": errors,
+        "last_test": last_test,
+        "test_running": test_running,
+        "findings": findings,
+        "status": worst([f["level"] for f in findings if f["level"] != "info"]) if findings else "ok",
+    }
+
+
+def load_json(path: str, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def write_json(path: str, data, mode: int) -> None:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        print("Erreur : lance cette commande avec sudo.", file=sys.stderr)
+        return 1
+    if not shutil.which("smartctl"):
+        print("Erreur : smartctl absent (sudo apt install smartmontools).", file=sys.stderr)
+        return 1
+
+    os.makedirs(STATE_DIR, exist_ok=True)
+    allow_test = "--no-test" not in sys.argv
+    state = load_json(STATE, {})
+    old_output = load_json(OUTPUT, {})
+    history = {d["device"]: d.get("history", []) for d in old_output.get("disks", [])}
+
+    disks = []
+    for dev in scan():
+        name = dev["name"]
+        args = ["-a", name] + (["-d", dev["type"]] if dev.get("type") and dev["type"] not in ("ata", "sat", "scsi", "nvme") else [])
+        info = smartctl_json(args)
+        if not info:
+            continue
+        previous = state.get(name, {})
+        disk = assess(name, info, previous)
+
+        # état pour la prochaine comparaison (seulement les compteurs de dégradation)
+        state[name] = {str(w["id"]): w["raw"] for w in disk["watched"] if w["id"] in DEGRADATION}
+
+        # relevé quotidien (dernier de la journée conservé)
+        today = datetime.now(timezone.utc).date().isoformat()
+        hist = [h for h in history.get(name, []) if h.get("date") != today]
+        hist.append({
+            "date": today, "temperature": disk["temperature"], "power_on_hours": disk["power_on_hours"],
+            **{f"a{w['id']}": w["raw"] for w in disk["watched"]},
+        })
+        disk["history"] = hist[-90:]
+
+        # auto-test court si le dernier date de plus d'une semaine
+        last = disk["last_test"]
+        if allow_test and not disk["test_running"] and disk["smart_supported"] and disk["power_on_hours"] is not None:
+            if last is None or (last.get("age_hours") or 0) >= SELFTEST_EVERY_HOURS:
+                result = run(["smartctl", "-t", "short", name])
+                disk["test_started"] = result.returncode == 0
+
+        disks.append(disk)
+
+    output = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_ts": int(time.time()),
+        "status": worst([d["status"] for d in disks]) if disks else "unknown",
+        "disks": disks,
+    }
+    write_json(OUTPUT, output, 0o644)
+    write_json(STATE, state, 0o600)
+
+    for d in disks:
+        print(f"{d['device']} ({d['model']}) : {d['status']}")
+        for f in d["findings"]:
+            print(f"  [{f['level']}] {f['text']}")
+    if not disks:
+        print("Aucun disque compatible SMART trouvé.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

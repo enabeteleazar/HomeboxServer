@@ -90,8 +90,14 @@ sont conservés, un `compose.yml` ou un `Caddyfile` modifié à la main n'est ja
 | `homebox-backup.timer` : sauvegarde locale + copie externe | tous les jours à 03:30 |
 | `homebox-healthcheck.timer` : contrôle de santé + alertes | toutes les 15 min |
 | `homebox-restore-test.timer` : restauration à blanc + vérification restic | le 1er du mois |
+| `homebox-smart.timer` : santé SMART des disques (+ auto-test court hebdomadaire) | toutes les heures |
 
 Toute tâche qui échoue envoie une notification (`homebox-failure@.service`).
+
+**Santé des disques** : `homebox-smart` écrit `/var/lib/homebox/smart.json` (lu par le
+dashboard) et retient les compteurs précédents. Secteurs réalloués ou en attente en
+hausse, auto-test échoué ou panne annoncée par le disque : `homebox-healthcheck`
+envoie une alerte. Relevé manuel : `sudo homebox-smart --no-test`.
 
 ## Accès
 
