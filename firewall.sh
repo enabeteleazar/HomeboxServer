@@ -62,8 +62,13 @@ fi
 HAS_TAILSCALE=false
 ip link show tailscale0 >/dev/null 2>&1 && HAS_TAILSCALE=true
 
+# sudo efface SSH_CONNECTION : on retrouve l'adresse via le terminal (who -m)
 CLIENT_IP=""
-[ -n "${SSH_CONNECTION:-}" ] && CLIENT_IP="${SSH_CONNECTION%% *}"
+if [ -n "${SSH_CONNECTION:-}" ]; then
+    CLIENT_IP="${SSH_CONNECTION%% *}"
+else
+    CLIENT_IP="$(who -m 2>/dev/null | sed -n 's/.*(\([0-9a-fA-F.:]*\)).*/\1/p' || true)"
+fi
 
 if [ "$TRUST_LAN" = "true" ] && [ -z "$LAN_NET" ]; then
     echo "Réseau local introuvable (pas de route par défaut) : relance avec TRUST_LAN=false."
@@ -79,10 +84,19 @@ fi
 # Règles
 # ----------------------------------------------------------
 
-RULES=()
+RULES=()     # ajoutées à la suite
+TRUSTED=()   # placées en tête de liste (prioritaires sur la limite SSH)
 
 RULES+=("default deny incoming")
 RULES+=("default allow outgoing")
+
+if [ "$TRUST_TAILSCALE" = "true" ] && [ "$HAS_TAILSCALE" = "true" ]; then
+    TRUSTED+=("allow in on tailscale0 comment homebox-tailscale")
+fi
+
+if [ "$TRUST_LAN" = "true" ]; then
+    TRUSTED+=("allow from $LAN_NET comment homebox-lan")
+fi
 
 if [ "$SSH_TAILSCALE_ONLY" = "true" ]; then
     RULES+=("allow in on tailscale0 to any port $SSH_PORT proto tcp comment homebox-ssh-tailscale")
@@ -97,13 +111,6 @@ if [ "$OPEN_WEB" = "true" ]; then
     RULES+=("allow 443/udp comment homebox-http3")
 fi
 
-if [ "$TRUST_TAILSCALE" = "true" ] && [ "$HAS_TAILSCALE" = "true" ]; then
-    RULES+=("allow in on tailscale0 comment homebox-tailscale")
-fi
-
-if [ "$TRUST_LAN" = "true" ]; then
-    RULES+=("allow from $LAN_NET comment homebox-lan")
-fi
 
 # ----------------------------------------------------------
 # Vérification : la session SSH actuelle reste-t-elle autorisée ?
@@ -129,8 +136,12 @@ echo "Réseau local      : ${LAN_NET:-aucun} (${LAN_IF:-?}) — confiance : $TRU
 echo "Tailscale         : $HAS_TAILSCALE — confiance : $TRUST_TAILSCALE"
 echo "Session SSH       : ${CLIENT_IP:-aucune détectée}"
 echo ""
-echo "Règles :"
+echo "Règles (dans l'ordre d'évaluation) :"
+[ "${#TRUSTED[@]}" -gt 0 ] && printf '  ufw prepend %s\n' "${TRUSTED[@]}"
 printf '  ufw %s\n' "${RULES[@]}"
+echo ""
+echo "Le réseau local et Tailscale passent avant la limite SSH : pas de blocage"
+echo "quand VS Code, scp ou git ouvrent plusieurs connexions d'affilée."
 echo ""
 
 if $DRY_RUN; then
@@ -141,6 +152,16 @@ fi
 for rule in "${RULES[@]}"; do
     # shellcheck disable=SC2086
     ufw $rule >/dev/null
+done
+
+# Règle de confiance déjà présente (éventuellement après la limite SSH) :
+# supprimée puis remise en tête. « ufw delete » ignore le commentaire.
+for rule in "${TRUSTED[@]+"${TRUSTED[@]}"}"; do
+    base="${rule% comment *}"
+    # shellcheck disable=SC2086
+    ufw --force delete $base >/dev/null 2>&1 || true
+    # shellcheck disable=SC2086
+    ufw prepend $rule >/dev/null
 done
 
 ufw --force enable >/dev/null
