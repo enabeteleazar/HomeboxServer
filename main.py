@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
 import firewall  # noqa: E402
+import monitor  # noqa: E402
 import services  # noqa: E402
 import webauth  # noqa: E402
 from api import API_VERSION, router as public_router, secured as secured_router  # noqa: E402
@@ -177,6 +178,58 @@ def fmt_duration(ms: Optional[int]) -> str:
     return f"{minutes} min {rest:02d} s"
 
 
+def fmt_bytes(value: Optional[float]) -> str:
+    if value is None:
+        return "—"
+    value = float(value)
+    for unit in ("o", "Ko", "Mo", "Go", "To"):
+        if abs(value) < 1024 or unit == "To":
+            text = f"{value:.0f}" if unit == "o" or value >= 100 else f"{value:.1f}"
+            return f"{text.replace('.', ',')} {unit}"
+        value /= 1024
+    return "—"
+
+
+def fmt_rate(value: Optional[float]) -> str:
+    return "—" if value is None else f"{fmt_bytes(value)}/s"
+
+
+def fmt_uptime(seconds: Optional[int]) -> str:
+    if seconds is None:
+        return "—"
+    days, rest = divmod(int(seconds), 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    if days:
+        return f"{days} j {hours} h"
+    if hours:
+        return f"{hours} h {minutes:02d} min"
+    return f"{minutes} min"
+
+
+def fmt_until(value: Optional[str]) -> str:
+    dt = _parse(value)
+    if not dt:
+        return "—"
+    seconds = int((dt - datetime.now(timezone.utc)).total_seconds())
+    if seconds <= 0:
+        return "imminent"
+    if seconds < 3600:
+        return f"dans {max(1, seconds // 60)} min"
+    if seconds < 86400:
+        return f"dans {seconds // 3600} h"
+    return f"dans {seconds // 86400} j"
+
+
+def fmt_pct(value: Optional[float]) -> str:
+    return "—" if value is None else f"{value:.0f} %" if value >= 10 else f"{value:.1f} %".replace(".", ",")
+
+
+templates.env.filters["bytes"] = fmt_bytes
+templates.env.filters["rate"] = fmt_rate
+templates.env.filters["uptime"] = fmt_uptime
+templates.env.filters["until"] = fmt_until
+templates.env.filters["pct"] = fmt_pct
 templates.env.filters["dt"] = fmt_datetime
 templates.env.filters["time"] = fmt_time
 templates.env.filters["ago"] = fmt_ago
@@ -312,6 +365,59 @@ def deployments_page(request: Request, project: Optional[str] = None, environmen
         deployments=journal.list_deployments(project=project, environment=environment, limit=200),
         selected_project=project, selected_environment=environment,
     )
+
+
+# --- serveur : système, Docker, services (rafraîchis en direct) -------------
+#
+# Chaque page charge son contenu une première fois, puis app.js recharge le
+# fragment « /…/live » toutes les quelques secondes (en pause si l'onglet
+# est caché).
+
+LIVE_PAGES = {
+    "system": ("system.html", "_system_live.html", monitor.system, 5),
+    "docker": ("docker.html", "_docker_live.html", monitor.docker, 10),
+    "services": ("services.html", "_services_live.html", monitor.services, 15),
+}
+
+
+def _live_page(request: Request, key: str):
+    page, _, collect, interval = LIVE_PAGES[key]
+    return render(request, page, nav=key, data=collect(), live_interval=interval * 1000)
+
+
+def _live_fragment(request: Request, key: str):
+    _, fragment, collect, _ = LIVE_PAGES[key]
+    return templates.TemplateResponse(request, fragment, {"data": collect()})
+
+
+@app.get("/system", response_class=HTMLResponse, include_in_schema=False)
+def system_page(request: Request):
+    return _live_page(request, "system")
+
+
+@app.get("/system/live", response_class=HTMLResponse, include_in_schema=False)
+def system_live(request: Request):
+    return _live_fragment(request, "system")
+
+
+@app.get("/docker", response_class=HTMLResponse, include_in_schema=False)
+def docker_page(request: Request):
+    return _live_page(request, "docker")
+
+
+@app.get("/docker/live", response_class=HTMLResponse, include_in_schema=False)
+def docker_live(request: Request):
+    return _live_fragment(request, "docker")
+
+
+@app.get("/services", response_class=HTMLResponse, include_in_schema=False)
+def services_page(request: Request):
+    return _live_page(request, "services")
+
+
+@app.get("/services/live", response_class=HTMLResponse, include_in_schema=False)
+def services_live(request: Request):
+    return _live_fragment(request, "services")
 
 
 @app.get("/firewall", response_class=HTMLResponse, include_in_schema=False)

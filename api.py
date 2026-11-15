@@ -174,3 +174,24 @@ def firewall_status() -> dict:
         "exposed_count": data["exposed_count"],
         "sockets": data["sockets"],
     }
+
+
+@secured.get("/system", summary="Système : CPU, mémoire, disques, réseau, températures, processus, mises à jour")
+def system_status() -> dict:
+    import monitor
+
+    return monitor.system()
+
+
+@secured.get("/docker", summary="Docker : conteneurs (état, santé, CPU, mémoire), espace disque, volumes")
+def docker_status() -> dict:
+    import monitor
+
+    return monitor.docker()
+
+
+@secured.get("/services", summary="Services systemd suivis, tâches planifiées et unités en échec")
+def services_status() -> dict:
+    import monitor
+
+    return monitor.services()

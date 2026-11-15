@@ -1,0 +1,89 @@
+{% import "_macros.html" as ui %}
+{% if not data.available %}
+<section class="card"><div class="card-body"><p class="empty">{{ data.error }}</p></div></section>
+{% else %}
+{% set states = {"running": "en marche", "exited": "arrêté", "restarting": "redémarre", "paused": "en pause", "created": "créé", "dead": "mort"} %}
+<section class="stats">
+  <article class="stat">
+    <p class="stat-label">En marche</p>
+    <p class="stat-value">{{ data.running }}<span class="stat-unit">/ {{ data.total }}</span></p>
+    <p class="stat-note">{{ data.total - data.running }} arrêté{{ "s" if data.total - data.running != 1 }}</p>
+  </article>
+  <article class="stat {{ 'stat-alert' if data.problems }}">
+    <p class="stat-label">À regarder</p>
+    <p class="stat-value">{{ data.problems }}</p>
+    <p class="stat-note">{{ "arrêtés, en erreur ou en mauvaise santé" if data.problems else "rien à signaler" }}</p>
+  </article>
+  {% for d in data.disk if d.type in ("Images", "Local Volumes") %}
+  <article class="stat">
+    <p class="stat-label">{{ "Images" if d.type == "Images" else "Volumes" }}</p>
+    <p class="stat-value">{{ d.size }}</p>
+    <p class="stat-note">{{ d.count }} au total · {{ d.reclaimable }} récupérable{{ "s" if d.type == "Images" }}</p>
+  </article>
+  {% else %}
+  <article class="stat"><p class="stat-label">Espace disque</p><p class="stat-value">…</p><p class="stat-note">calcul en cours</p></article>
+  {% endfor %}
+</section>
+
+{% for project, items in data.containers|groupby("project") %}
+<section class="card">
+  <header class="card-head"><div>
+    <h2>{{ project or "Conteneurs isolés" }}</h2>
+    <p class="card-sub">{% if project %}Projet Docker Compose · {% endif %}{{ items|length }} conteneur{{ "s" if items|length > 1 }}</p>
+  </div></header>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Conteneur</th><th>État</th><th class="num">CPU</th><th class="num">Mémoire</th><th>Ports</th><th>Depuis</th></tr></thead>
+      <tbody>
+        {% for c in items %}
+        <tr>
+          <td data-label="Conteneur"><strong>{{ c.name }}</strong><span class="cell-sub mono">{{ c.image }}</span></td>
+          <td data-label="État">
+            {{ ui.level_pill(c.level, states.get(c.state, c.state)) }}
+            {% if c.health %}<span class="cell-sub">{{ {"healthy": "en bonne santé", "unhealthy": "en mauvaise santé", "starting": "démarrage"}.get(c.health, c.health) }}</span>{% endif %}
+          </td>
+          <td data-label="CPU" class="num">{{ c.stats.cpu|pct if c.stats else "—" }}</td>
+          <td data-label="Mémoire" class="num">{{ c.stats.memory if c.stats else "—" }}{% if c.stats and c.stats.memory_percent is not none %}<span class="cell-sub">{{ c.stats.memory_percent|pct }} de la RAM</span>{% endif %}</td>
+          <td data-label="Ports">{% for p in c.ports %}<span class="tag mono">{{ p }}</span> {% else %}—{% endfor %}</td>
+          <td data-label="Depuis"><span class="cell-sub">{{ c.status }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endfor %}
+
+<section class="grid-2">
+  <article class="card">
+    <header class="card-head"><div><h2>Espace disque Docker</h2>
+      <p class="card-sub">« Récupérable » : ce que <span class="mono">docker system prune</span> libérerait</p></div></header>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Type</th><th class="num">Nombre</th><th class="num">Utilisés</th><th class="num">Taille</th><th class="num">Récupérable</th></tr></thead>
+        <tbody>
+          {% for d in data.disk %}
+          <tr>
+            <td data-label="Type">{{ {"Images": "Images", "Containers": "Conteneurs", "Local Volumes": "Volumes", "Build Cache": "Cache de build"}.get(d.type, d.type) }}</td>
+            <td data-label="Nombre" class="num">{{ d.count }}</td>
+            <td data-label="Utilisés" class="num">{{ d.active }}</td>
+            <td data-label="Taille" class="num">{{ d.size }}</td>
+            <td data-label="Récupérable" class="num">{{ d.reclaimable }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5"><p class="empty">Calcul en cours…</p></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+  <article class="card">
+    <header class="card-head"><div><h2>Volumes</h2><p class="card-sub">{{ data.volumes|length }} volume{{ "s" if data.volumes|length != 1 }}</p></div></header>
+    <div class="card-body">
+      <details id="volumes-list"><summary>Voir la liste</summary>
+        <div class="tag-list">{% for v in data.volumes %}<span class="tag mono">{{ v.name }}</span>{% endfor %}</div>
+      </details>
+    </div>
+  </article>
+</section>
+{% endif %}

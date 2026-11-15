@@ -1,0 +1,197 @@
+{% import "_macros.html" as ui %}
+{% set cpu = data.cpu %}{% set mem = data.memory %}
+{% set main_disk = data.disks|sort(attribute="percent", reverse=True)|first %}
+<section class="stats">
+  <article class="stat">
+    <p class="stat-label">Processeur</p>
+    <p class="stat-value level-{{ cpu.level }}">{{ cpu.percent|pct }}</p>
+    {{ ui.meter(cpu.percent, cpu.level, "Processeur") }}
+    <p class="stat-note">charge {{ cpu.load[0] }} · {{ cpu.cores }} cœur{{ "s" if cpu.cores > 1 }}</p>
+  </article>
+  <article class="stat">
+    <p class="stat-label">Mémoire</p>
+    <p class="stat-value level-{{ mem.level }}">{{ mem.percent|pct }}</p>
+    {{ ui.meter(mem.percent, mem.level, "Mémoire") }}
+    <p class="stat-note">{{ mem.used|bytes }} sur {{ mem.total|bytes }}</p>
+  </article>
+  <article class="stat">
+    <p class="stat-label">Disque le plus rempli</p>
+    {% if main_disk %}
+    <p class="stat-value level-{{ main_disk.level }}">{{ main_disk.percent|pct }}</p>
+    {{ ui.meter(main_disk.percent, main_disk.level, "Disque " ~ main_disk.mount) }}
+    <p class="stat-note"><span class="mono">{{ main_disk.mount }}</span> · {{ main_disk.free|bytes }} libres</p>
+    {% else %}<p class="stat-value">—</p>{% endif %}
+  </article>
+  <article class="stat">
+    <p class="stat-label">Température CPU</p>
+    {% if cpu.temperature is not none %}
+    <p class="stat-value level-{{ cpu.temperature_level }}">{{ cpu.temperature|round|int }}<span class="stat-unit">°C</span></p>
+    {{ ui.meter(cpu.temperature, cpu.temperature_level, "Température") }}
+    {% else %}<p class="stat-value">—</p>{% endif %}
+    <p class="stat-note">allumé depuis {{ data.uptime_seconds|uptime }}</p>
+  </article>
+</section>
+
+{% if data.reboot_required or (data.updates and data.updates.count) %}
+<div class="flash flash-{{ 'error' if data.reboot_required or data.updates.security else 'busy' }}" role="status">
+  {{ ui.icon("alert") }}
+  <span>
+    {% if data.reboot_required %}Redémarrage nécessaire pour finir des mises à jour. {% endif %}
+    {% if data.updates and data.updates.count %}{{ data.updates.count }} mise{{ "s" if data.updates.count > 1 }} à jour en attente{% if data.updates.security %}, dont {{ data.updates.security }} de sécurité{% endif %} :
+    <span class="mono">sudo apt upgrade</span>{% endif %}
+  </span>
+</div>
+{% endif %}
+
+<section class="grid-2">
+  <article class="card">
+    <header class="card-head"><div><h2>Processeur</h2>
+      <p class="card-sub">{{ cpu.model }}{% if cpu.freq_mhz %} · {{ cpu.freq_mhz }} MHz (max {{ cpu.freq_max_mhz }}){% endif %}</p></div></header>
+    <div class="card-body mstack">
+      {% for core in cpu.per_core %}
+      <div class="mrow"><span class="mrow-label">Cœur {{ loop.index0 }}</span>{{ ui.meter(core.percent, core.level, "Cœur " ~ loop.index0) }}<span class="mrow-value">{{ core.percent|pct }}</span></div>
+      {% endfor %}
+      <dl class="kv">
+        <dt>Charge moyenne</dt><dd>{{ cpu.load[0] }} (1 min) · {{ cpu.load[1] }} (5 min) · {{ cpu.load[2] }} (15 min)</dd>
+        <dt>Par cœur</dt><dd>{{ cpu.load_per_core }} {% if cpu.load_per_core >= 1 %}— saturé{% elif cpu.load_per_core >= 0.7 %}— chargé{% else %}— tranquille{% endif %}</dd>
+      </dl>
+    </div>
+  </article>
+
+  <article class="card">
+    <header class="card-head"><div><h2>Mémoire</h2>
+      <p class="card-sub">« Utilisée » exclut le cache, que Linux libère à la demande.</p></div></header>
+    <div class="card-body mstack">
+      <div class="mrow"><span class="mrow-label">RAM</span>{{ ui.meter(mem.percent, mem.level, "RAM") }}<span class="mrow-value">{{ mem.percent|pct }}</span></div>
+      <p class="mrow-sub">{{ mem.used|bytes }} utilisés · {{ mem.available|bytes }} disponibles · {{ mem.cached|bytes }} en cache</p>
+      <div class="mrow"><span class="mrow-label">Swap</span>{{ ui.meter(data.swap.percent, data.swap.level, "Swap") }}<span class="mrow-value">{{ data.swap.percent|pct }}</span></div>
+      <p class="mrow-sub">{{ data.swap.used|bytes }} sur {{ data.swap.total|bytes }}{% if data.swap.percent >= 30 %} — la RAM manque par moments{% endif %}</p>
+    </div>
+  </article>
+</section>
+
+<section class="card">
+  <header class="card-head"><div><h2>Disques</h2>
+    <p class="card-sub">Remplissage des partitions et activité du disque</p></div></header>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Partition</th><th>Remplissage</th><th class="num">Utilisé</th><th class="num">Libre</th><th class="num">Taille</th></tr></thead>
+      <tbody>
+        {% for d in data.disks %}
+        <tr>
+          <td data-label="Partition"><span class="mono">{{ d.mount }}</span><span class="cell-sub">{{ d.device }} · {{ d.fstype }}</span></td>
+          <td data-label="Remplissage"><div class="mrow" style="grid-template-columns: minmax(0,1fr) auto;">{{ ui.meter(d.percent, d.level, d.mount) }}<span class="mrow-value">{{ d.percent|pct }}</span></div></td>
+          <td data-label="Utilisé" class="num">{{ d.used|bytes }}</td>
+          <td data-label="Libre" class="num">{{ d.free|bytes }}</td>
+          <td data-label="Taille" class="num">{{ d.total|bytes }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if data.disk_io %}
+  <div class="card-body">
+    <dl class="kv">
+      {% for io in data.disk_io %}
+      <dt><span class="mono">{{ io.name }}</span></dt>
+      <dd>{{ io.model or "disque" }}{% if io.rotational %} · disque mécanique{% elif io.rotational is false %} · SSD{% endif %}
+        — lecture {{ io.read_per_s|rate }} · écriture {{ io.write_per_s|rate }}{% if io.busy_percent is not none %} · occupé {{ io.busy_percent|pct }}{% endif %}</dd>
+      {% endfor %}
+    </dl>
+  </div>
+  {% endif %}
+</section>
+
+<section class="grid-2">
+  <article class="card">
+    <header class="card-head"><div><h2>Réseau</h2><p class="card-sub">Débit actuel par interface</p></div></header>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Interface</th><th>Adresse</th><th class="num">↓ Reçu</th><th class="num">↑ Envoyé</th></tr></thead>
+        <tbody>
+          {% for n in data.network %}
+          <tr>
+            <td data-label="Interface"><span class="mono">{{ n.name }}</span><span class="cell-sub">{{ n.kind or "—" }}{% if not n.up %} · déconnectée{% endif %}</span></td>
+            <td data-label="Adresse"><span class="mono">{{ n.ipv4|join(", ") or "—" }}</span></td>
+            <td data-label="↓ Reçu" class="num">{{ n.rx_per_s|rate }}<span class="cell-sub">{{ n.rx_total|bytes }} au total</span></td>
+            <td data-label="↑ Envoyé" class="num">{{ n.tx_per_s|rate }}<span class="cell-sub">{{ n.tx_total|bytes }} au total</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="card">
+    <header class="card-head"><div><h2>Températures</h2><p class="card-sub">Alerte à {{ 70 }} °C, critique à {{ 85 }} °C</p></div></header>
+    <div class="card-body mstack">
+      {% for t in data.temperatures %}
+      <div class="mrow"><span class="mrow-label">{{ t.label }}</span>{{ ui.meter(t.value, t.level, t.label) }}<span class="mrow-value">{{ t.value|round|int }} °C</span></div>
+      {% else %}
+      <p class="empty">Aucun capteur lisible.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="grid-2">
+  <article class="card">
+    <header class="card-head"><div><h2>Processus les plus gourmands</h2>
+      <p class="card-sub">{{ data.processes.count }} processus · CPU en % d'un cœur</p></div></header>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Processus</th><th>Utilisateur</th><th class="num">CPU</th><th class="num">Mémoire</th></tr></thead>
+        <tbody>
+          {% for p in data.processes.by_cpu %}
+          <tr>
+            <td data-label="Processus"><strong>{{ p.name }}</strong><span class="cell-sub mono" title="{{ p.command }}">{{ p.command|truncate(60, True, "…") }}</span></td>
+            <td data-label="Utilisateur">{{ p.user }}</td>
+            <td data-label="CPU" class="num">{{ p.cpu|pct }}</td>
+            <td data-label="Mémoire" class="num">{{ p.memory|bytes }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="card">
+    <header class="card-head"><div><h2>Plus gros consommateurs de mémoire</h2><p class="card-sub">Mémoire réellement occupée (RSS)</p></div></header>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Processus</th><th>Utilisateur</th><th class="num">Mémoire</th></tr></thead>
+        <tbody>
+          {% for p in data.processes.by_memory %}
+          <tr>
+            <td data-label="Processus"><strong>{{ p.name }}</strong><span class="cell-sub mono" title="{{ p.command }}">{{ p.command|truncate(60, True, "…") }}</span></td>
+            <td data-label="Utilisateur">{{ p.user }}</td>
+            <td data-label="Mémoire" class="num">{{ p.memory|bytes }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+
+<section class="card">
+  <header class="card-head"><div><h2>Machine</h2></div></header>
+  <div class="card-body">
+    <dl class="kv">
+      <dt>Nom</dt><dd>{{ data.hostname }}</dd>
+      <dt>Système</dt><dd>{{ data.os }} · noyau {{ data.kernel }}</dd>
+      <dt>Démarré</dt><dd>{{ data.boot_time|dt }} (depuis {{ data.uptime_seconds|uptime }})</dd>
+      <dt>Redémarrage requis</dt><dd>{{ "oui" if data.reboot_required else "non" }}</dd>
+      <dt>Mises à jour</dt>
+      <dd>
+        {% if data.updates is none %}vérification en cours…
+        {% elif data.updates.count == 0 %}système à jour
+        {% else %}
+        <details id="updates-list"><summary>{{ data.updates.count }} paquet{{ "s" if data.updates.count > 1 }} à mettre à jour</summary>
+          <div class="tag-list">{% for pkg in data.updates.packages %}<span class="tag mono">{{ pkg }}</span>{% endfor %}</div>
+        </details>
+        {% endif %}
+      </dd>
+    </dl>
+  </div>
+</section>

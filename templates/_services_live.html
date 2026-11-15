@@ -1,0 +1,53 @@
+{% import "_macros.html" as ui %}
+{% set active_labels = {"active": "actif", "inactive": "arrêté", "failed": "en échec", "activating": "démarrage", "deactivating": "arrêt", "reloading": "rechargement"} %}
+{% if data.failed %}
+<div class="flash flash-error" role="alert">{{ ui.icon("alert") }}
+  <span>Unité{{ "s" if data.failed|length > 1 }} en échec :
+    {% for f in data.failed %}<span class="mono">{{ f.unit }}</span>{{ ", " if not loop.last }}{% endfor %}
+    — détails : <span class="mono">journalctl -u {{ data.failed[0].unit }}</span></span>
+</div>
+{% endif %}
+
+<section class="card">
+  <header class="card-head"><div><h2>Services</h2>
+    <p class="card-sub">Les services essentiels du serveur (ceux absents de la machine sont masqués)</p></div></header>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Service</th><th>État</th><th>Démarrage auto</th><th>Depuis</th><th class="num">Mémoire</th><th class="num">Redémarrages</th></tr></thead>
+      <tbody>
+        {% for s in data.services %}
+        <tr>
+          <td data-label="Service"><strong>{{ s.label }}</strong><span class="cell-sub mono">{{ s.unit }}</span></td>
+          <td data-label="État">{{ ui.level_pill(s.level, active_labels.get(s.active, s.active)) }}<span class="cell-sub">{{ s.sub }}</span></td>
+          <td data-label="Démarrage auto">{{ {"enabled": "oui", "disabled": "non", "static": "dépendance", "indirect": "indirect", "masked": "masqué"}.get(s.enabled, s.enabled or "—") }}</td>
+          <td data-label="Depuis">{{ s.since|ago if s.since else "—" }}<span class="cell-sub">{{ s.since|dt if s.since else "" }}</span></td>
+          <td data-label="Mémoire" class="num">{{ s.memory|bytes if s.memory else "—" }}</td>
+          <td data-label="Redémarrages" class="num">{{ s.restarts }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <header class="card-head"><div><h2>Tâches planifiées</h2>
+    <p class="card-sub">Sauvegardes HOMEBOX, contrôles de santé, maintenance du système</p></div></header>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Tâche</th><th>Dernier passage</th><th>Résultat</th><th>Prochain passage</th></tr></thead>
+      <tbody>
+        {% for t in data.timers %}
+        <tr>
+          <td data-label="Tâche"><strong>{{ t.unit|replace(".timer", "") }}</strong><span class="cell-sub">{{ t.description }}</span></td>
+          <td data-label="Dernier passage">{{ t.last|ago if t.last else "jamais" }}<span class="cell-sub">{{ t.last|dt if t.last else "" }}</span></td>
+          <td data-label="Résultat">{{ ui.level_pill(t.level, "réussi" if t.result == "success" else ("—" if t.result == "—" else t.result)) }}</td>
+          <td data-label="Prochain passage">{{ t.next|until }}<span class="cell-sub">{{ t.next|dt }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4"><p class="empty">Aucune tâche planifiée suivie.</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>

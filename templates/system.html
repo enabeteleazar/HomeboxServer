@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Système{% endblock %}
+{% block heading %}Système{% endblock %}
+{% block subheading %}
+<p class="sub">{{ data.hostname }} · {{ data.os }} · noyau {{ data.kernel }}</p>
+{% endblock %}
+{% block page_actions %}{% include "_live_badge.html" %}{% endblock %}
+{% block content %}
+<div class="live-stack" data-live-src="/system/live" data-live-interval="{{ live_interval }}">
+{% include "_system_live.html" %}
+</div>
+{% endblock %}

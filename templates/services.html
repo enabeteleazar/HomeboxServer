@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Services{% endblock %}
+{% block heading %}Services{% endblock %}
+{% block subheading %}
+<p class="sub">{{ data.services|length }} services suivis · {{ data.timers|length }} tâches planifiées{% if data.problems %} · {{ data.problems }} problème{{ "s" if data.problems > 1 }}{% endif %}</p>
+{% endblock %}
+{% block page_actions %}{% include "_live_badge.html" %}{% endblock %}
+{% block content %}
+<div class="live-stack" data-live-src="/services/live" data-live-interval="{{ live_interval }}">
+{% include "_services_live.html" %}
+</div>
+{% endblock %}

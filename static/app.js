@@ -289,4 +289,57 @@
         .catch(function () { /* dashboard momentanément injoignable : on réessaiera */ });
     }, 4000);
   }
+
+  /* --- pages en direct (Système, Docker, Services) ------------------------ */
+  // Le conteneur [data-live-src] est rechargé à intervalle régulier avec le
+  // fragment HTML renvoyé par le serveur. En pause quand l'onglet est caché.
+
+  var live = document.querySelector("[data-live-src]");
+  if (live && typeof fetch === "function") {
+    var src = live.getAttribute("data-live-src");
+    var every = parseInt(live.getAttribute("data-live-interval"), 10) || 5000;
+    var badge = document.querySelector("[data-live-status]");
+    var label = badge ? badge.querySelector("[data-live-label]") : null;
+    var busy = false;
+
+    function setBadge(state, text) {
+      if (!badge) return;
+      badge.classList.toggle("is-paused", state === "paused");
+      badge.classList.toggle("is-error", state === "error");
+      if (label) label.textContent = text;
+    }
+
+    function refresh() {
+      if (busy) return;
+      if (document.hidden) { setBadge("paused", "En pause"); return; }
+      busy = true;
+      fetch(src, { headers: { Accept: "text/x-fragment" }, cache: "no-store" })
+        .then(function (res) {
+          if (res.status === 401) {
+            window.location.href = "/login?next=" + encodeURIComponent(window.location.pathname);
+            return null;
+          }
+          if (!res.ok) throw new Error(String(res.status));
+          return res.text();
+        })
+        .then(function (html) {
+          if (html === null) return;
+          // garde l'état ouvert des <details> d'un rafraîchissement à l'autre
+          var open = {};
+          live.querySelectorAll("details[id]").forEach(function (d) { open[d.id] = d.open; });
+          live.innerHTML = html;
+          Object.keys(open).forEach(function (id) {
+            var d = document.getElementById(id);
+            if (d) d.open = open[id];
+          });
+          var now = new Date();
+          setBadge("live", "En direct · " + now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+        })
+        .catch(function () { setBadge("error", "Connexion perdue, nouvel essai…"); })
+        .then(function () { busy = false; });
+    }
+
+    setInterval(refresh, every);
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
+  }
 })();

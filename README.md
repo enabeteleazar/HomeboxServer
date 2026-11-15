@@ -95,6 +95,19 @@ Détails d'usage : les actions longues (build, deploy) tournent en arrière-plan
 
 Ce qui n'apparaît pas dans le journal : les commandes lancées directement en SSH (`make deploy duoLingo`). Seul ce qui passe par le dashboard ou l'API est tracé.
 
+### Suivi du serveur
+
+Pages rafraîchies en direct (en pause quand l'onglet est caché) :
+
+| Page | Contenu | Rafraîchissement |
+|---|---|---|
+| Système | CPU (par cœur, charge, fréquence), mémoire et swap, partitions, activité disque, réseau par interface, températures, processus les plus gourmands, mises à jour apt en attente, redémarrage requis | 5 s |
+| Docker | conteneurs par projet Compose (état, santé, CPU, mémoire, ports), espace disque Docker, volumes | 10 s |
+| Services | services systemd essentiels, tâches planifiées (dernier/prochain passage, résultat), unités en échec | 15 s |
+| Pare-feu | état UFW, exposition réelle de chaque port, règles, fail2ban | à la demande |
+
+Tout est lu sans droits root (psutil, docker, systemctl), sauf le pare-feu qui passe par `homebox-firewall` (kit HomeboxServer, `make tools`). Les mêmes données sont exposées à Neron : `GET /api/v1/system`, `/docker`, `/services`, `/firewall`.
+
 ### Connexion à l'interface web
 
 L'interface est protégée par un mot de passe unique ; l'API `/api/v1` garde son jeton Bearer et n'est pas concernée.
