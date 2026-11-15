@@ -1,0 +1,214 @@
+#!/bin/bash
+# ==========================================================
+# HOMEBOX HEALTHCHECK : contrôle de santé du serveur
+# Lancé toutes les 15 minutes par homebox-healthcheck.timer.
+# Envoie une alerte quand un problème apparaît, un rappel
+# toutes les ALERT_REMIND_HOURS, et un message quand tout est réglé.
+#
+#   homebox-healthcheck              contrôle + notification
+#   homebox-healthcheck --no-notify  affiche seulement le rapport
+# ==========================================================
+
+set -Euo pipefail
+
+# shellcheck source=../lib/common.sh
+. "${HOMEBOX_LIB:-/usr/local/lib/homebox/common.sh}"
+
+require_root
+load_conf
+
+DISK_WARN_PERCENT="${DISK_WARN_PERCENT:-85}"
+BACKUP_MAX_AGE_HOURS="${BACKUP_MAX_AGE_HOURS:-26}"
+ALERT_REMIND_HOURS="${ALERT_REMIND_HOURS:-24}"
+OFFSITE_REQUIRED="${OFFSITE_REQUIRED:-true}"
+SSH_CHECK="${SSH_CHECK:-true}"
+# Conteneurs autorisés à publier un port sur toutes les interfaces (séparés par des espaces)
+PUBLIC_PORTS_ALLOWED="${PUBLIC_PORTS_ALLOWED:-}"
+
+NOTIFY=true
+[ "${1:-}" = "--no-notify" ] && NOTIFY=false
+
+issues=()
+add_issue() { issues+=("$*"); }
+
+now="$(date +%s)"
+
+# ----------------------------------------------------------
+# Espace disque
+# ----------------------------------------------------------
+
+docker_root="$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
+
+while read -r pcent target; do
+    pcent="${pcent%\%}"
+    if [ "$pcent" -ge "$DISK_WARN_PERCENT" ]; then
+        add_issue "Disque $target plein à ${pcent} % (seuil ${DISK_WARN_PERCENT} %)"
+    fi
+done < <(
+    for path in / "$BACKUP_DIR" "$docker_root"; do
+        [ -e "$path" ] && df --output=pcent,target "$path" | tail -n 1
+    done | sort -u -k2
+)
+
+# ----------------------------------------------------------
+# Docker et conteneurs HOMEBOX
+# ----------------------------------------------------------
+
+if ! docker info >/dev/null 2>&1; then
+    add_issue "Le service Docker ne répond pas"
+else
+    if [ -f "$COMPOSE_FILE" ] && [ -f "$ENV_FILE" ]; then
+        while IFS= read -r service; do
+            [ -n "$service" ] || continue
+            line="$(compose ps -a --format '{{.State}} {{.Health}}' "$service" 2>/dev/null | head -n 1)"
+            state="${line%% *}"
+            health="${line#* }"
+            [ "$health" = "$line" ] && health=""
+
+            if [ -z "$state" ]; then
+                add_issue "Conteneur absent : $service"
+            elif [ "$state" != "running" ]; then
+                add_issue "Conteneur arrêté : $service ($state)"
+            elif [ "$health" = "unhealthy" ]; then
+                add_issue "Conteneur en mauvaise santé : $service"
+            fi
+        done < <(compose config --services 2>/dev/null)
+    else
+        add_issue "Configuration Docker absente ($BASE_DIR)"
+    fi
+
+    # Ports publiés sur toutes les interfaces : Docker contourne UFW,
+    # un tel port est joignable depuis l'extérieur malgré le pare-feu.
+    while IFS=$'\t' read -r name ports; do
+        case " $PUBLIC_PORTS_ALLOWED " in *" $name "*) continue ;; esac
+        if echo "$ports" | grep -qE '(^|, )(0\.0\.0\.0|\[?::\]?):[0-9]+->'; then
+            add_issue "Port exposé à l'extérieur par le conteneur $name : $(echo "$ports" | grep -oE '(0\.0\.0\.0|\[?::\]?):[0-9]+->[0-9]+/[a-z]+' | sort -u | paste -sd ' ')"
+        fi
+    done < <(docker ps --format '{{.Names}}\t{{.Ports}}')
+fi
+
+# ----------------------------------------------------------
+# Sauvegardes
+# ----------------------------------------------------------
+
+last_local="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20[0-9]*-[0-9]*' -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1)"
+last_local="${last_local%.*}"
+
+if [ -z "$last_local" ]; then
+    add_issue "Aucune sauvegarde locale dans $BACKUP_DIR"
+elif [ $(( now - last_local )) -gt $(( BACKUP_MAX_AGE_HOURS * 3600 )) ]; then
+    add_issue "Dernière sauvegarde locale vieille de $(( (now - last_local) / 3600 )) h"
+fi
+
+if offsite_configured; then
+    if [ ! -f "$STATE_DIR/last-offsite" ]; then
+        add_issue "Aucune copie externe réussie pour l'instant"
+    else
+        last_offsite="$(cat "$STATE_DIR/last-offsite")"
+        if [ $(( now - last_offsite )) -gt $(( BACKUP_MAX_AGE_HOURS * 3600 )) ]; then
+            add_issue "Dernière copie externe vieille de $(( (now - last_offsite) / 3600 )) h"
+        fi
+    fi
+elif [ "$OFFSITE_REQUIRED" = "true" ]; then
+    add_issue "Copie externe des sauvegardes non configurée ($HOMEBOX_CONF_DIR/restic.env)"
+fi
+
+for timer in homebox-backup.timer; do
+    systemctl is-active --quiet "$timer" 2>/dev/null || add_issue "Timer inactif : $timer"
+done
+
+# ----------------------------------------------------------
+# Santé des disques (relevé de homebox-smart, toutes les heures)
+# ----------------------------------------------------------
+
+SMART_FILE="$STATE_DIR/smart.json"
+
+if command -v smartctl >/dev/null 2>&1; then
+    if [ ! -f "$SMART_FILE" ]; then
+        add_issue "Santé SMART des disques jamais relevée (sudo homebox-smart)"
+    else
+        smart_age=$(( now - $(stat -c %Y "$SMART_FILE") ))
+        if [ "$smart_age" -gt $(( 3 * 3600 )) ]; then
+            add_issue "Relevé SMART des disques vieux de $(( smart_age / 3600 )) h (homebox-smart.timer ?)"
+        fi
+        # Problèmes graves seulement : les avertissements stables sont sur le dashboard
+        while IFS= read -r line; do
+            [ -n "$line" ] && add_issue "$line"
+        done < <(python3 - "$SMART_FILE" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+for disk in data.get("disks", []):
+    for f in disk.get("findings", []):
+        if f.get("level") == "crit":
+            print(f"Disque {disk.get('device')} : {f.get('text')}")
+PY
+        )
+    fi
+fi
+
+# ----------------------------------------------------------
+# Sécurité
+# ----------------------------------------------------------
+
+if command -v ufw >/dev/null 2>&1 && ufw_status="$(ufw status 2>/dev/null)"; then
+    echo "$ufw_status" | grep -q "Status: active" || add_issue "Pare-feu UFW inactif"
+fi
+
+if [ "$SSH_CHECK" = "true" ] && command -v sshd >/dev/null 2>&1; then
+    sshd_conf="$(sshd -T 2>/dev/null || true)"
+    if echo "$sshd_conf" | grep -qx 'passwordauthentication yes'; then
+        add_issue "SSH accepte les mots de passe (lance harden-ssh.sh)"
+    fi
+    if echo "$sshd_conf" | grep -qx 'permitrootlogin yes'; then
+        add_issue "SSH accepte la connexion directe de root"
+    fi
+fi
+
+# ----------------------------------------------------------
+# Seuils soutenus (historique du dashboard) et certificats HTTPS
+# ----------------------------------------------------------
+
+STATUS_BIN="${HOMEBOX_STATUS_BIN:-/usr/local/sbin/homebox-status}"
+if [ -x "$STATUS_BIN" ]; then
+    while IFS= read -r line; do
+        [ -n "$line" ] && add_issue "$line"
+    done < <("$STATUS_BIN" checks 2>/dev/null || true)
+fi
+
+# ----------------------------------------------------------
+# Rapport et notifications
+# ----------------------------------------------------------
+
+current="$(printf '%s\n' "${issues[@]+"${issues[@]}"}" | sed '/^$/d')"
+
+if [ -z "$current" ]; then
+    echo "HOMEBOX : tout va bien."
+else
+    echo "HOMEBOX : ${#issues[@]} problème(s)"
+    echo "$current" | sed 's/^/  - /'
+fi
+
+# État public pour le dashboard (/var/lib/homebox/status.json, sans secret)
+if [ -x "$STATUS_BIN" ]; then
+    printf '%s\n' "$current" | "$STATUS_BIN" write || echo "Écriture de status.json impossible." >&2
+fi
+
+$NOTIFY || exit 0
+
+install -d -m 0755 "$STATE_DIR"
+previous="$(cat "$STATE_DIR/health-last" 2>/dev/null || true)"
+last_sent="$(cat "$STATE_DIR/health-sent" 2>/dev/null || echo 0)"
+
+if [ -n "$current" ]; then
+    if [ "$current" != "$previous" ] || [ $(( now - last_sent )) -ge $(( ALERT_REMIND_HOURS * 3600 )) ]; then
+        notify "${#issues[@]} problème(s)" "$(echo "$current" | sed 's/^/- /')" 4 "warning"
+        echo "$now" > "$STATE_DIR/health-sent"
+    fi
+elif [ -n "$previous" ]; then
+    notify "Tout est rentré dans l'ordre" "Plus aucun problème détecté." 2 "white_check_mark"
+fi
+
+printf '%s' "$current" > "$STATE_DIR/health-last"

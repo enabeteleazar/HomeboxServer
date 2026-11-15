@@ -1,0 +1,142 @@
+#!/bin/bash
+# ==========================================================
+# HOMEBOX BACKUP : PostgreSQL (toutes les bases) + Redis
+#                  + Uptime Kuma + .env, puis copie externe
+# Installé par infra-docker.sh dans /usr/local/sbin/homebox-backup
+# Lancé chaque nuit par homebox-backup.timer (root).
+# ==========================================================
+
+set -Eeuo pipefail
+umask 077
+
+# shellcheck source=../lib/common.sh
+. "${HOMEBOX_LIB:-/usr/local/lib/homebox/common.sh}"
+
+require_root
+load_conf
+
+if ! [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]] || [ "$RETENTION_DAYS" -lt 1 ]; then
+    die "RETENTION_DAYS invalide : $RETENTION_DAYS"
+fi
+
+[ -f "$ENV_FILE" ] || die "fichier .env introuvable : $ENV_FILE"
+
+PG_USER="$(get_env POSTGRES_USER)"
+[ -n "$PG_USER" ] || die "POSTGRES_USER manquant dans $ENV_FILE"
+
+for container in "$PG_CONTAINER" "$REDIS_CONTAINER"; do
+    container_running "$container" || die "conteneur non démarré : $container"
+done
+
+install -d -m 0700 "$BACKUP_DIR"
+install -d -m 0755 "$STATE_DIR"
+
+# Un seul backup à la fois
+exec 9> "$BACKUP_DIR/.lock"
+flock -n 9 || die "une sauvegarde est déjà en cours."
+
+STAMP="$(date '+%Y%m%d-%H%M%S')"
+WORK="$BACKUP_DIR/.partial-$STAMP"
+FINAL="$BACKUP_DIR/$STAMP"
+
+# Un dossier incomplet n'est jamais conservé
+trap 'rm -rf "$WORK"' EXIT
+
+mkdir -p "$WORK/postgres"
+
+# ----------------------------------------------------------
+# PostgreSQL : une archive par base (format custom, compressé)
+# ----------------------------------------------------------
+
+mapfile -t DATABASES < <(
+    docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -AtX -c \
+        "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY 1"
+)
+
+[ "${#DATABASES[@]}" -gt 0 ] || die "aucune base PostgreSQL trouvée."
+
+for db in "${DATABASES[@]}"; do
+    [[ "$db" =~ ^[A-Za-z0-9_.-]+$ ]] || die "nom de base non pris en charge : $db"
+
+    docker exec "$PG_CONTAINER" \
+        pg_dump -U "$PG_USER" -d "$db" -Fc > "$WORK/postgres/$db.dump"
+
+    # Vérifie que l'archive est lisible
+    docker exec -i "$PG_CONTAINER" pg_restore --list < "$WORK/postgres/$db.dump" > /dev/null
+done
+
+# Rôles (avec mots de passe) et paramètres globaux
+docker exec "$PG_CONTAINER" \
+    pg_dumpall -U "$PG_USER" --globals-only > "$WORK/postgres-globals.sql"
+
+# ----------------------------------------------------------
+# Redis (snapshot RDB ; le mot de passe reste dans le conteneur)
+# ----------------------------------------------------------
+
+docker exec "$REDIS_CONTAINER" sh -c \
+    'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli --rdb /tmp/backup.rdb' > /dev/null 2>&1
+docker cp "$REDIS_CONTAINER:/tmp/backup.rdb" "$WORK/redis.rdb"
+docker exec "$REDIS_CONTAINER" rm -f /tmp/backup.rdb
+
+# ----------------------------------------------------------
+# Uptime Kuma (configuration des sondes), s'il est installé
+# ----------------------------------------------------------
+
+if container_running "$KUMA_CONTAINER"; then
+    docker exec "$KUMA_CONTAINER" tar -czf - -C /app/data . > "$WORK/uptime-kuma.tar.gz"
+fi
+
+# ----------------------------------------------------------
+# .env (sans lui, un volume Postgres existant est inutilisable)
+# ----------------------------------------------------------
+
+cp "$ENV_FILE" "$WORK/env.backup"
+
+# ----------------------------------------------------------
+# Contrôles d'intégrité
+# ----------------------------------------------------------
+
+while IFS= read -r -d '' file; do
+    [ -s "$file" ] || die "fichier de sauvegarde vide : ${file#"$WORK"/}"
+done < <(find "$WORK" -type f -print0)
+
+(
+    cd "$WORK"
+    find . -type f ! -name SHA256SUMS -printf '%P\0' | sort -z | xargs -0 sha256sum > SHA256SUMS
+)
+
+mv "$WORK" "$FINAL"
+trap - EXIT
+
+echo "Sauvegarde locale OK : $FINAL ($(du -sh "$FINAL" | cut -f1), ${#DATABASES[@]} base(s))"
+
+# ----------------------------------------------------------
+# Rotation (uniquement après une sauvegarde réussie)
+# ----------------------------------------------------------
+
+find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d \
+    -name '20[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]' \
+    -mtime +"$RETENTION_DAYS" -exec rm -rf {} +
+
+# Copies de sécurité faites par homebox-restore avant d'écraser une base
+find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type f -name 'pre-restore-*.dump' \
+    -mtime +"$RETENTION_DAYS" -delete
+
+# Restes d'une sauvegarde interrompue (coupure de courant...)
+find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '.partial-*' -mmin +120 -exec rm -rf {} +
+
+echo "Sauvegardes locales conservées : $(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20*' | wc -l)"
+
+# ----------------------------------------------------------
+# Copie externe (restic), si configurée
+# ----------------------------------------------------------
+
+if offsite_configured; then
+    if ! "${HOMEBOX_OFFSITE_BIN:-/usr/local/sbin/homebox-offsite}" backup "$FINAL"; then
+        # La sauvegarde locale reste valable ; l'échec fait passer
+        # le service en erreur, ce qui déclenche la notification.
+        die "copie externe échouée (la sauvegarde locale $FINAL est valide)."
+    fi
+else
+    echo "Copie externe non configurée ($HOMEBOX_CONF_DIR/restic.env)."
+fi

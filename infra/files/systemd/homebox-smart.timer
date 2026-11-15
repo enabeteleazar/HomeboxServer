@@ -1,0 +1,10 @@
+[Unit]
+Description=Relevé SMART des disques HOMEBOX toutes les heures
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

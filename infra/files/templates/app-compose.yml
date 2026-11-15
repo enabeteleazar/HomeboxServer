@@ -1,0 +1,40 @@
+# ==========================================================
+# Modèle : déployer un projet en conteneur sur HOMEBOX
+# À copier dans le dossier du projet (compose.yml), puis :
+#   homebox-project create monprojet        -> DATABASE_URL
+#   docker compose up -d --build
+#   sudo homebox-site add monprojet.example.com 5190
+# ==========================================================
+
+name: monprojet
+
+services:
+
+  app:
+    build: .
+    container_name: monprojet
+    restart: unless-stopped
+
+    # Toujours 127.0.0.1 : Docker contourne le pare-feu UFW,
+    # un port publié sans cette adresse est ouvert sur Internet.
+    # Caddy (sur la machine) fait le lien avec l'extérieur.
+    ports:
+      - "127.0.0.1:5190:3000"
+
+    env_file: .env.local
+    # Dans .env.local, depuis un conteneur, l'hôte est « postgres » :
+    #   DATABASE_URL=postgresql://monprojet:...@postgres:5432/monprojet
+    #   REDIS_URL=redis://:<REDIS_PASSWORD>@redis:6379/0
+
+    networks:
+      - homebox-network
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  homebox-network:
+    external: true

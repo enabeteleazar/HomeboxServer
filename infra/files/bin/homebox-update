@@ -1,0 +1,70 @@
+#!/bin/bash
+# ==========================================================
+# HOMEBOX UPDATE : mise à jour des images Docker
+# Les tags sont figés sur une version majeure (postgres:18, redis:8...) :
+# seules les mises à jour mineures et correctifs sont appliqués.
+#
+#   homebox-update           sauvegarde, télécharge, redémarre ce qui a changé
+#   homebox-update --check   indique seulement si des mises à jour existent
+# ==========================================================
+
+set -Eeuo pipefail
+
+# shellcheck source=../lib/common.sh
+. "${HOMEBOX_LIB:-/usr/local/lib/homebox/common.sh}"
+
+require_root
+load_conf
+
+CHECK_ONLY=false
+[ "${1:-}" = "--check" ] && CHECK_ONLY=true
+
+[ -f "$COMPOSE_FILE" ] || die "compose.yml introuvable : $COMPOSE_FILE"
+
+# Image en cours d'exécution vs image fraîchement téléchargée, par service
+declare -A running_id
+while IFS= read -r service; do
+    cid="$(compose ps -q "$service" 2>/dev/null | head -n 1)"
+    running_id[$service]="$( [ -n "$cid" ] && docker inspect -f '{{.Image}}' "$cid" || echo none)"
+done < <(compose config --services)
+
+echo "Téléchargement des images..."
+compose pull --quiet
+
+changed=()
+while IFS=$'\t' read -r service image; do
+    latest="$(docker image inspect -f '{{.Id}}' "$image")"
+    if [ "${running_id[$service]}" != "$latest" ]; then
+        changed+=("$service ($image)")
+    fi
+done < <(
+    compose config --format json | python3 -c '
+import json, sys
+for name, svc in json.load(sys.stdin)["services"].items():
+    print(name, svc["image"], sep="\t")'
+)
+
+if [ "${#changed[@]}" -eq 0 ]; then
+    echo "Tout est à jour."
+    exit 0
+fi
+
+echo "Mises à jour disponibles :"
+printf '  - %s\n' "${changed[@]}"
+
+$CHECK_ONLY && exit 0
+
+echo ""
+echo "Sauvegarde avant mise à jour..."
+"${HOMEBOX_BACKUP_BIN:-/usr/local/sbin/homebox-backup}"
+
+echo ""
+echo "Redémarrage des services mis à jour..."
+compose up -d --remove-orphans --wait --wait-timeout 180
+
+docker image prune -f >/dev/null
+
+echo ""
+compose ps
+notify "Mise à jour appliquée" "$(printf -- '- %s\n' "${changed[@]}")" 2 "arrows_counterclockwise"
+echo "Mise à jour terminée."

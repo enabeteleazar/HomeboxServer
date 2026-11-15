@@ -1,0 +1,11 @@
+[Unit]
+Description=Test mensuel de restauration HOMEBOX
+Requires=docker.service
+After=docker.service homebox-backup.service
+OnFailure=homebox-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homebox-restore test latest --notify
+ExecStart=/usr/local/sbin/homebox-offsite check --if-configured
+Nice=10

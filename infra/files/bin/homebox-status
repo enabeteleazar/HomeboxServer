@@ -1,0 +1,308 @@
+#!/usr/bin/python3 -I
+"""HOMEBOX STATUS : contrôles complémentaires et état public du serveur.
+
+Appelé par homebox-healthcheck (root) toutes les 15 minutes :
+
+  homebox-status checks   affiche un problème par ligne :
+                            - seuils soutenus (moyenne sur ALERT_WINDOW_MIN min,
+                              lus dans l'historique du dashboard) : CPU, RAM,
+                              swap, température ;
+                            - certificats HTTPS des sites Caddy proches de l'expiration.
+  homebox-status write    lit les problèmes sur l'entrée standard et écrit
+                          /var/lib/homebox/status.json (lisible par tous, SANS
+                          secret) : sauvegardes, copie externe, test de
+                          restauration, sécurité, problèmes en cours.
+
+Réglages (variables d'environnement, posées par homebox.conf) :
+  METRICS_DB, ALERT_WINDOW_MIN, CPU_ALERT_PERCENT, MEM_ALERT_PERCENT,
+  SWAP_ALERT_PERCENT, TEMP_ALERT, CERT_WARN_DAYS, BACKUP_DIR, STATE_DIR
+"""
+from __future__ import annotations
+
+import glob
+import json
+import os
+import socket
+import sqlite3
+import ssl
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+
+ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
+
+
+def conf(name: str, default):
+    value = os.environ.get(name, "")
+    if value == "":
+        return default
+    try:
+        return type(default)(value)
+    except (TypeError, ValueError):
+        return default
+
+
+STATE_DIR = conf("STATE_DIR", "/var/lib/homebox")
+BACKUP_DIR = conf("BACKUP_DIR", "/srv/backups/homebox")
+CONF_DIR = conf("HOMEBOX_CONF_DIR", "/etc/homebox")
+METRICS_DB = conf("METRICS_DB", "/srv/.data/metrics.db")
+WINDOW_MIN = conf("ALERT_WINDOW_MIN", 15)
+CPU_ALERT = conf("CPU_ALERT_PERCENT", 90.0)
+MEM_ALERT = conf("MEM_ALERT_PERCENT", 90.0)
+SWAP_ALERT = conf("SWAP_ALERT_PERCENT", 50.0)
+TEMP_ALERT = conf("TEMP_ALERT", 85.0)
+CERT_WARN_DAYS = conf("CERT_WARN_DAYS", 14)
+CADDY_SITES = "/etc/caddy/sites"
+
+
+def run(cmd: list[str], timeout: int = 20) -> str:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=ENV).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+# --- seuils soutenus -------------------------------------------------------
+
+def threshold_issues() -> list[str]:
+    if not os.path.isfile(METRICS_DB):
+        return []
+    since = int(time.time()) - WINDOW_MIN * 60
+    try:
+        conn = sqlite3.connect(f"file:{METRICS_DB}?mode=ro", uri=True, timeout=5)
+        row = conn.execute(
+            "SELECT COUNT(*), AVG(cpu), AVG(mem), AVG(swap), MIN(temp) FROM samples WHERE ts >= ?", (since,)
+        ).fetchone()
+        conn.close()
+    except sqlite3.Error:
+        return []
+    count, cpu, mem, swap, temp_min = row
+    # au moins les deux tiers des mesures attendues, sinon pas de verdict
+    if not count or count < (WINDOW_MIN * 60 / 15) * 2 / 3:
+        return []
+    issues = []
+    if cpu is not None and cpu >= CPU_ALERT:
+        issues.append(f"Processeur à {cpu:.0f} % en moyenne depuis {WINDOW_MIN} min (seuil {CPU_ALERT:.0f} %)")
+    if mem is not None and mem >= MEM_ALERT:
+        issues.append(f"Mémoire à {mem:.0f} % en moyenne depuis {WINDOW_MIN} min (seuil {MEM_ALERT:.0f} %)")
+    if swap is not None and swap >= SWAP_ALERT:
+        issues.append(f"Swap à {swap:.0f} % en moyenne depuis {WINDOW_MIN} min : la RAM manque")
+    # température : alerte si elle n'est JAMAIS redescendue sous le seuil pendant la fenêtre
+    if temp_min is not None and temp_min >= TEMP_ALERT:
+        issues.append(f"Processeur au-dessus de {TEMP_ALERT:.0f} °C depuis {WINDOW_MIN} min")
+    return issues
+
+
+# --- certificats HTTPS ------------------------------------------------------
+
+def caddy_domains() -> list[str]:
+    return sorted(os.path.basename(p)[:-6] for p in glob.glob(os.path.join(CADDY_SITES, "*.caddy")))
+
+
+def certificate(domain: str) -> dict:
+    """Certificat servi localement par Caddy pour ce domaine (SNI)."""
+    ctx = ssl.create_default_context()
+    try:
+        with socket.create_connection(("127.0.0.1", 443), timeout=5) as raw:
+            with ctx.wrap_socket(raw, server_hostname=domain) as tls:
+                cert = tls.getpeercert()
+    except (OSError, ssl.SSLError) as exc:
+        return {"domain": domain, "ok": False, "error": str(exc)[:200]}
+    not_after = datetime.fromtimestamp(ssl.cert_time_to_seconds(cert["notAfter"]), timezone.utc)
+    issuer = dict(x[0] for x in cert.get("issuer", ()))
+    days = (not_after - datetime.now(timezone.utc)).days
+    return {"domain": domain, "ok": True, "expires": not_after.isoformat(), "days_left": days,
+            "issuer": issuer.get("organizationName") or issuer.get("commonName", "")}
+
+
+def certificates() -> list[dict]:
+    return [certificate(d) for d in caddy_domains()]
+
+
+def cert_issues(certs: list[dict]) -> list[str]:
+    issues = []
+    for c in certs:
+        if not c["ok"]:
+            issues.append(f"Certificat HTTPS de {c['domain']} illisible : {c['error']}")
+        elif c["days_left"] < CERT_WARN_DAYS:
+            issues.append(f"Certificat HTTPS de {c['domain']} expire dans {c['days_left']} jours "
+                          "(Caddy devrait le renouveler : vérifie journalctl -u caddy)")
+    return issues
+
+
+# --- état public -------------------------------------------------------------
+
+def dir_size(path: str) -> int:
+    total = 0
+    for base, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(base, name))
+            except OSError:
+                pass
+    return total
+
+
+def backups() -> dict:
+    items = []
+    if os.path.isdir(BACKUP_DIR):
+        for name in sorted(os.listdir(BACKUP_DIR), reverse=True):
+            path = os.path.join(BACKUP_DIR, name)
+            if not (os.path.isdir(path) and name[:2] == "20" and "-" in name):
+                continue
+            pg = os.path.join(path, "postgres")
+            databases = sorted(f[:-5] for f in os.listdir(pg) if f.endswith(".dump")) if os.path.isdir(pg) else \
+                (["(ancien format)"] if os.path.exists(os.path.join(path, "postgres.dump")) else [])
+            items.append({
+                "name": name, "time": datetime.fromtimestamp(os.path.getmtime(path), timezone.utc).isoformat(),
+                "size": dir_size(path), "databases": databases,
+                "has_redis": os.path.exists(os.path.join(path, "redis.rdb")),
+                "has_kuma": os.path.exists(os.path.join(path, "uptime-kuma.tar.gz")),
+                "verified": os.path.exists(os.path.join(path, "SHA256SUMS")),
+            })
+    return {"directory": BACKUP_DIR, "items": items[:60], "count": len(items),
+            "total_size": sum(i["size"] for i in items)}
+
+
+def offsite() -> dict:
+    repo = ""
+    path = os.path.join(CONF_DIR, "restic.env")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("RESTIC_REPOSITORY="):
+                    repo = line.split("=", 1)[1].strip().strip("\"'")
+    except OSError:
+        pass
+    last = None
+    try:
+        with open(os.path.join(STATE_DIR, "last-offsite"), encoding="utf-8") as f:
+            last = datetime.fromtimestamp(int(f.read().strip()), timezone.utc).isoformat()
+    except (OSError, ValueError):
+        pass
+    # type de destination seulement (jamais le chemin ni les identifiants)
+    kind = ""
+    if repo:
+        kind = repo.split(":", 1)[0] if ":" in repo and not repo.startswith("/") else "disque local"
+        kind = {"b2": "Backblaze B2", "s3": "stockage S3", "sftp": "SFTP", "rest": "serveur REST",
+                "rclone": "rclone", "azure": "Azure", "gs": "Google Cloud"}.get(kind, kind)
+    return {"configured": bool(repo), "kind": kind, "last": last,
+            "initialized": os.path.exists(os.path.join(CONF_DIR, "restic.pass"))}
+
+
+def unit(name: str) -> dict:
+    props = ["ActiveState", "Result", "ExecMainExitTimestamp", "ExecMainStatus"]
+    out = run(["systemctl", "show", name, "-p", ",".join(props)])
+    info = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    return {"active": info.get("ActiveState", ""), "result": info.get("Result", ""),
+            "last_exit": info.get("ExecMainExitTimestamp", "") or None,
+            "exit_status": info.get("ExecMainStatus", "")}
+
+
+def timer_next(name: str) -> str | None:
+    try:
+        data = json.loads(run(["systemctl", "list-timers", "--all", "-o", "json", name]) or "[]")
+    except json.JSONDecodeError:
+        return None
+    for t in data:
+        if t.get("unit") == name and t.get("next"):
+            return datetime.fromtimestamp(t["next"] / 1_000_000, timezone.utc).isoformat()
+    return None
+
+
+def security() -> dict:
+    sshd = {}
+    for line in run(["sshd", "-T"]).splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            sshd[parts[0]] = parts[1]
+    ufw = run(["ufw", "status"])
+    f2b = run(["fail2ban-client", "status", "sshd"])
+    banned = 0
+    for line in f2b.splitlines():
+        if "Currently banned:" in line:
+            try:
+                banned = int(line.split(":")[1])
+            except ValueError:
+                pass
+    keys = 0
+    user = os.environ.get("HOMEBOX_USER", "")
+    if user:
+        try:
+            home = os.path.expanduser(f"~{user}")
+            with open(os.path.join(home, ".ssh", "authorized_keys"), encoding="utf-8") as f:
+                keys = sum(1 for l in f if l.strip() and not l.startswith("#"))
+        except OSError:
+            pass
+    return {
+        "ssh_password_auth": sshd.get("passwordauthentication") == "yes",
+        "ssh_root_login": sshd.get("permitrootlogin", "") not in ("no", ""),
+        "ssh_port": sshd.get("port", "22"),
+        "ssh_keys": keys if user else None,
+        "ufw_active": "Status: active" in ufw,
+        "fail2ban_running": bool(f2b.strip()),
+        "fail2ban_banned": banned,
+        "unattended_upgrades": os.path.exists("/etc/apt/apt.conf.d/20auto-upgrades"),
+        "docker_group": [m for m in (run(["getent", "group", "docker"]).strip().split(":")[-1] or "").split(",") if m],
+    }
+
+
+def write_status(issues: list[str]) -> None:
+    restore_test = unit("homebox-restore-test.service")
+    report = None
+    try:
+        with open(os.path.join(STATE_DIR, "restore-test.json"), encoding="utf-8") as f:
+            report = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        pass
+    smart = None
+    try:
+        with open(os.path.join(STATE_DIR, "smart.json"), encoding="utf-8") as f:
+            smart = json.load(f).get("status")
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    certs = certificates()
+    status = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_ts": int(time.time()),
+        "issues": issues,
+        "backups": backups(),
+        "backup_unit": {**unit("homebox-backup.service"), "next": timer_next("homebox-backup.timer")},
+        "offsite": offsite(),
+        "restore_test": {**restore_test, "next": timer_next("homebox-restore-test.timer"), "report": report},
+        "security": security(),
+        "smart_status": smart,
+        "certificates": certs,
+        "thresholds": {"cpu": CPU_ALERT, "mem": MEM_ALERT, "swap": SWAP_ALERT, "temp": TEMP_ALERT,
+                       "window_min": WINDOW_MIN, "cert_days": CERT_WARN_DAYS},
+    }
+    os.makedirs(STATE_DIR, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=STATE_DIR)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(status, f, ensure_ascii=False, indent=1)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, os.path.join(STATE_DIR, "status.json"))
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        print("Erreur : lance cette commande avec sudo.", file=sys.stderr)
+        return 1
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "checks":
+        for line in threshold_issues() + cert_issues(certificates()):
+            print(line)
+        return 0
+    if cmd == "write":
+        issues = [line.strip() for line in sys.stdin if line.strip()]
+        write_status(issues)
+        return 0
+    print(__doc__)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

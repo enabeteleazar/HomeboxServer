@@ -1,0 +1,8 @@
+[Unit]
+Description=Contrôle de santé HOMEBOX
+After=docker.service
+OnFailure=homebox-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homebox-healthcheck

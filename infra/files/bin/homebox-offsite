@@ -1,0 +1,134 @@
+#!/bin/bash
+# ==========================================================
+# HOMEBOX OFFSITE : copie chiffrée des sauvegardes hors de
+# la machine, avec restic.
+# Configuration : /etc/homebox/restic.env (root, 0600)
+#
+#   homebox-offsite init              crée le dépôt restic
+#   homebox-offsite backup <dossier>  envoie une sauvegarde (appelé par homebox-backup)
+#   homebox-offsite snapshots         liste les copies externes
+#   homebox-offsite check             vérifie l'intégrité du dépôt (5 % des données relues)
+#   homebox-offsite restore <id|latest> <cible>
+#   homebox-offsite status            état de la configuration
+# ==========================================================
+
+set -Eeuo pipefail
+umask 077
+
+# shellcheck source=../lib/common.sh
+. "${HOMEBOX_LIB:-/usr/local/lib/homebox/common.sh}"
+
+require_root
+load_conf
+
+RESTIC_ENV="$HOMEBOX_CONF_DIR/restic.env"
+PASS_FILE="$HOMEBOX_CONF_DIR/restic.pass"
+
+usage() {
+    sed -n '/^#   homebox-offsite/s/^#   //p' "$0"
+    exit 1
+}
+
+load_restic() {
+    command -v restic >/dev/null 2>&1 || die "restic n'est pas installé (sudo apt install restic)."
+    offsite_configured || die "dépôt non configuré : renseigne RESTIC_REPOSITORY dans $RESTIC_ENV"
+    load_conf_file "$RESTIC_ENV"
+    export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-$PASS_FILE}"
+    [ -s "$RESTIC_PASSWORD_FILE" ] || die "mot de passe restic absent : $RESTIC_PASSWORD_FILE (lance d'abord : homebox-offsite init)"
+    export RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/homebox-restic}"
+}
+
+cmd="${1:-}"
+[ -n "$cmd" ] || usage
+shift
+
+case "$cmd" in
+
+    init)
+        offsite_configured || die "renseigne d'abord RESTIC_REPOSITORY dans $RESTIC_ENV (voir les exemples du fichier)."
+        if [ ! -s "$PASS_FILE" ]; then
+            openssl rand -base64 48 | tr -d '\n' > "$PASS_FILE"
+            chmod 600 "$PASS_FILE"
+            echo "Mot de passe du dépôt généré : $PASS_FILE"
+        fi
+        load_restic
+
+        if restic cat config >/dev/null 2>&1; then
+            echo "Le dépôt existe déjà : $RESTIC_REPOSITORY"
+        else
+            restic init
+        fi
+
+        echo ""
+        echo "IMPORTANT : sans ce mot de passe, la copie externe est illisible."
+        echo "Recopie-le dans ton gestionnaire de mots de passe :"
+        echo "  sudo cat $PASS_FILE"
+        ;;
+
+    backup)
+        dir="${1:-}"
+        [ -d "$dir" ] || die "dossier à envoyer introuvable : $dir"
+        load_restic
+
+        restic backup "$dir" --tag homebox --host homebox --no-scan
+
+        # Chaque sauvegarde a un chemin différent : on regroupe par tag,
+        # sinon la politique de rétention ne s'appliquerait jamais.
+        restic forget \
+            --tag homebox --group-by host,tags \
+            --keep-daily "${OFFSITE_KEEP_DAILY:-7}" \
+            --keep-weekly "${OFFSITE_KEEP_WEEKLY:-4}" \
+            --keep-monthly "${OFFSITE_KEEP_MONTHLY:-6}" \
+            --prune
+
+        install -d -m 0755 "$STATE_DIR"
+        date +%s > "$STATE_DIR/last-offsite"
+        echo "Copie externe OK : $RESTIC_REPOSITORY"
+        ;;
+
+    snapshots)
+        load_restic
+        restic snapshots --tag homebox
+        ;;
+
+    check)
+        if [ "${1:-}" = "--if-configured" ] && ! offsite_configured; then
+            echo "Copie externe non configurée : vérification ignorée."
+            exit 0
+        fi
+        load_restic
+        restic check --read-data-subset=5%
+        ;;
+
+    restore)
+        snapshot="${1:-}"
+        target="${2:-}"
+        [ -n "$snapshot" ] && [ -n "$target" ] || usage
+        load_restic
+        install -d -m 0700 "$target"
+        restic restore "$snapshot" --tag homebox --target "$target"
+        echo "Restauré dans $target. Ensuite : sudo homebox-restore <commande> $target$BACKUP_DIR/<horodatage>"
+        ;;
+
+    status)
+        if ! command -v restic >/dev/null 2>&1; then
+            echo "restic : non installé"
+        elif ! offsite_configured; then
+            echo "Copie externe : non configurée ($RESTIC_ENV)"
+        elif [ ! -s "$(grep -m1 '^RESTIC_PASSWORD_FILE=' "$RESTIC_ENV" | cut -d= -f2- | tr -d '"' || true)" ] && [ ! -s "$PASS_FILE" ]; then
+            echo "Copie externe : dépôt renseigné mais pas initialisé (sudo homebox-offsite init)"
+        else
+            load_restic
+            echo "Dépôt     : $RESTIC_REPOSITORY"
+            if [ -f "$STATE_DIR/last-offsite" ]; then
+                echo "Dernier envoi : $(date -d "@$(cat "$STATE_DIR/last-offsite")" '+%F %T')"
+            else
+                echo "Dernier envoi : jamais"
+            fi
+        fi
+        ;;
+
+    *)
+        usage
+        ;;
+esac

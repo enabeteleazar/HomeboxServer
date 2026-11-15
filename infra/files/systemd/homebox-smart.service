@@ -1,0 +1,8 @@
+[Unit]
+Description=Santé SMART des disques HOMEBOX
+OnFailure=homebox-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homebox-smart
+Nice=10

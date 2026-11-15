@@ -1,0 +1,347 @@
+#!/usr/bin/python3 -I
+"""HOMEBOX FIREWALL : accès restreint à UFW pour le dashboard (via sudo).
+
+La règle sudoers autorise ce script sans contrôler ses arguments : TOUT est
+validé ici. Les règles posées par firewall.sh (commentaire « homebox-… »)
+sont protégées : le dashboard ne peut ni les supprimer ni les imiter.
+
+  homebox-firewall status
+  homebox-firewall add --action allow|deny|reject|limit [--port 8080 | 8000:8100]
+                       [--proto tcp|udp|any] [--from any|IP|CIDR] [--in INTERFACE]
+                       [--comment TEXTE]
+  homebox-firewall delete --number N --expect "TEXTE EXACT DE LA RÈGLE"
+  homebox-firewall enable | disable
+  homebox-firewall policy [--dry-run]     politique HOMEBOX (firewall.sh)
+
+Sortie : toujours un objet JSON ; code 0 si ok, 1 sinon.
+"""
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
+POLICY_SCRIPT = "/usr/local/lib/homebox/firewall.sh"
+PROTECTED_PREFIX = "homebox-"
+DASHBOARD_PORT = 5199
+
+RULE_RE = re.compile(
+    r"^\[\s*(?P<num>\d+)\]\s+(?P<to>.+?)\s+(?P<action>ALLOW|DENY|REJECT|LIMIT)"
+    r"(?:\s+(?P<dir>IN|OUT|FWD))?\s+(?P<frm>.+?)(?:\s+#\s*(?P<comment>.*?))?\s*$"
+)
+COMMENT_RE = re.compile(r"^[\w .:/+()-]{0,60}$")
+IFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
+PORT_RE = re.compile(r"^(\d{1,5})(?::(\d{1,5}))?$")
+
+
+class Refused(Exception):
+    pass
+
+
+def run(cmd: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, env=ENV, timeout=timeout)
+
+
+def ufw(*args: str) -> subprocess.CompletedProcess:
+    return run(["ufw", *args])
+
+
+def reply(ok: bool, message: str, **extra) -> None:
+    print(json.dumps({"ok": ok, "message": message, **extra}, ensure_ascii=False))
+    sys.exit(0 if ok else 1)
+
+
+# --- lecture ---------------------------------------------------------------
+
+def ssh_port() -> int:
+    out = run(["sshd", "-T"]).stdout
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == "port" and parts[1].isdigit():
+            return int(parts[1])
+    return 22
+
+
+def defaults_from_file() -> dict:
+    result = {"incoming": "?", "outgoing": "?", "routed": "?"}
+    try:
+        with open("/etc/default/ufw", encoding="utf-8") as f:
+            for line in f:
+                key, _, value = line.strip().partition("=")
+                value = value.strip('"').lower()
+                if key == "DEFAULT_INPUT_POLICY":
+                    result["incoming"] = "deny" if value == "drop" else value
+                elif key == "DEFAULT_OUTPUT_POLICY":
+                    result["outgoing"] = "deny" if value == "drop" else value
+                elif key == "DEFAULT_FORWARD_POLICY":
+                    result["routed"] = "deny" if value == "drop" else value
+    except OSError:
+        pass
+    return result
+
+
+def parse_rules() -> list[dict]:
+    rules = []
+    for line in ufw("status", "numbered").stdout.splitlines():
+        m = RULE_RE.match(line.rstrip())
+        if not m:
+            continue
+        to, frm = m.group("to").strip(), m.group("frm").strip()
+        comment = (m.group("comment") or "").strip()
+        text = line.split("]", 1)[1].strip()
+        rules.append({
+            "number": int(m.group("num")),
+            "to": to.replace(" (v6)", ""),
+            "action": m.group("action"),
+            "direction": m.group("dir") or "IN",
+            "from": frm.replace(" (v6)", ""),
+            "comment": comment,
+            "v6": "(v6)" in to or "(v6)" in frm,
+            "protected": comment.startswith(PROTECTED_PREFIX),
+            "text": " ".join(text.split()),
+        })
+    return rules
+
+
+def added_rules() -> list[str]:
+    """Règles enregistrées (lisibles même pare-feu inactif)."""
+    lines = []
+    for line in ufw("show", "added").stdout.splitlines():
+        line = line.strip()
+        if line.startswith("ufw "):
+            lines.append(line[4:])
+    return lines
+
+
+def fail2ban() -> dict | None:
+    if not shutil.which("fail2ban-client"):
+        return None
+    out = run(["fail2ban-client", "status", "sshd"])
+    if out.returncode != 0:
+        return {"available": False}
+    text = out.stdout
+
+    def grab(pattern: str) -> str:
+        m = re.search(pattern, text)
+        return m.group(1).strip() if m else ""
+
+    banned_list = grab(r"Banned IP list:\s*(.*)")
+    return {
+        "available": True,
+        "currently_banned": int(grab(r"Currently banned:\s*(\d+)") or 0),
+        "total_banned": int(grab(r"Total banned:\s*(\d+)") or 0),
+        "currently_failed": int(grab(r"Currently failed:\s*(\d+)") or 0),
+        "banned_ips": banned_list.split() if banned_list else [],
+    }
+
+
+def status() -> dict:
+    verbose = ufw("status", "verbose").stdout
+    active = "Status: active" in verbose
+    logging = ""
+    defaults = defaults_from_file()
+    for line in verbose.splitlines():
+        if line.startswith("Logging:"):
+            logging = line.split(":", 1)[1].strip()
+        elif line.startswith("Default:"):
+            for part in line.split(":", 1)[1].split(","):
+                m = re.match(r"\s*(\w+)\s+\((\w+)\)", part)
+                if m:
+                    defaults[m.group(2)] = m.group(1)
+    return {
+        "active": active,
+        "logging": logging,
+        "defaults": defaults,
+        "rules": parse_rules() if active else [],
+        "added": added_rules(),
+        "ssh_port": ssh_port(),
+        "interfaces": sorted(n for n in os.listdir("/sys/class/net") if n != "lo"),
+        "fail2ban": fail2ban(),
+        "policy_available": os.path.isfile(POLICY_SCRIPT),
+    }
+
+
+# --- écriture --------------------------------------------------------------
+
+def validate_add(a: argparse.Namespace) -> list[str]:
+    action = a.action
+    if action not in ("allow", "deny", "reject", "limit"):
+        raise Refused("action inconnue")
+
+    port = (a.port or "").strip()
+    if port:
+        m = PORT_RE.match(port)
+        if not m:
+            raise Refused("port invalide (ex. 8080 ou 8000:8100)")
+        low, high = int(m.group(1)), int(m.group(2) or m.group(1))
+        if not (1 <= low <= 65535 and 1 <= high <= 65535 and low <= high):
+            raise Refused("port hors de 1-65535")
+        if m.group(2) and a.proto not in ("tcp", "udp"):
+            raise Refused("une plage de ports exige tcp ou udp")
+    else:
+        low = high = None
+
+    if a.proto not in ("tcp", "udp", "any"):
+        raise Refused("protocole invalide")
+
+    source = (a.source or "any").strip()
+    if source != "any":
+        try:
+            source = str(ipaddress.ip_network(source, strict=False))
+        except ValueError:
+            raise Refused("source invalide (any, une IP ou un réseau CIDR)")
+
+    iface = (a.iface or "").strip()
+    if iface:
+        if not IFACE_RE.match(iface) or iface not in os.listdir("/sys/class/net"):
+            raise Refused("interface inconnue")
+
+    comment = (a.comment or "").strip()
+    if not COMMENT_RE.match(comment):
+        raise Refused("commentaire invalide (60 caractères, lettres, chiffres, espaces, . : / + ( ) -)")
+    if comment.lower().startswith(PROTECTED_PREFIX):
+        raise Refused(f"le préfixe « {PROTECTED_PREFIX} » est réservé aux règles de firewall.sh")
+
+    if action == "allow" and not port and source == "any" and not iface:
+        raise Refused("ouvrir tous les ports à tout Internet reviendrait à désactiver le pare-feu")
+
+    if action == "limit" and not port:
+        raise Refused("limit s'applique à un port")
+
+    if action in ("deny", "reject"):
+        guarded = {ssh_port(), DASHBOARD_PORT}
+        if not port:
+            raise Refused("bloquer tous les ports d'une source peut te couper l'accès : précise un port")
+        hit = [p for p in guarded if low <= p <= high]
+        if hit:
+            raise Refused(f"refusé : bloquer le port {hit[0]} (SSH ou dashboard) peut te couper l'accès")
+
+    cmd = [action]
+    if iface:
+        cmd += ["in", "on", iface]
+    if a.proto != "any":
+        cmd += ["proto", a.proto]
+    cmd += ["from", source, "to", "any"]
+    if port:
+        cmd += ["port", port]
+    if comment:
+        cmd += ["comment", comment]
+    return cmd
+
+
+def rule_ports(words: list[str]) -> list[str]:
+    """Ports visés par une règle « ufw show added » (vide = tous les ports)."""
+    ports = []
+    for i, word in enumerate(words):
+        if i > 0 and words[i - 1] == "port":
+            ports.append(word)
+        elif i == 1 and re.match(r"^\d+(:\d+)?(/\w+)?$", word):
+            ports.append(word)
+    return ports
+
+
+def ssh_reachable_after_enable() -> bool:
+    """Vrai si une règle enregistrée laisse passer SSH (sinon activer = se couper)."""
+    port = ssh_port()
+    for rule in added_rules():
+        words = rule.split(" comment ")[0].split()
+        if not words or words[0] not in ("allow", "limit"):
+            continue
+        ports = rule_ports(words)
+        if not ports:
+            return True  # source entière autorisée (réseau local, Tailscale…)
+        for spec in ports:
+            low, _, high = spec.split("/")[0].partition(":")
+            if low.isdigit() and int(low) <= port <= int(high or low):
+                return True
+    return False
+
+
+def main() -> None:
+    if os.geteuid() != 0:
+        reply(False, "doit être lancé en root (sudo)")
+    if not shutil.which("ufw"):
+        reply(False, "UFW n'est pas installé")
+
+    parser = argparse.ArgumentParser(prog="homebox-firewall")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("status")
+    p_add = sub.add_parser("add")
+    p_add.add_argument("--action", required=True)
+    p_add.add_argument("--port", default="")
+    p_add.add_argument("--proto", default="tcp")
+    p_add.add_argument("--from", dest="source", default="any")
+    p_add.add_argument("--in", dest="iface", default="")
+    p_add.add_argument("--comment", default="")
+    p_del = sub.add_parser("delete")
+    p_del.add_argument("--number", type=int, required=True)
+    p_del.add_argument("--expect", required=True)
+    sub.add_parser("enable")
+    sub.add_parser("disable")
+    p_pol = sub.add_parser("policy")
+    p_pol.add_argument("--dry-run", action="store_true")
+
+    try:
+        args = parser.parse_args()
+    except SystemExit:
+        reply(False, "arguments invalides")
+
+    try:
+        if args.cmd == "status":
+            reply(True, "ok", status=status())
+
+        if args.cmd == "add":
+            cmd = validate_add(args)
+            out = ufw(*cmd)
+            text = (out.stdout + out.stderr).strip()
+            if out.returncode != 0:
+                reply(False, f"UFW a refusé la règle : {text}", command="ufw " + " ".join(cmd))
+            reply(True, text or "Règle ajoutée", command="ufw " + " ".join(cmd))
+
+        if args.cmd == "delete":
+            rules = {r["number"]: r for r in parse_rules()}
+            rule = rules.get(args.number)
+            if rule is None:
+                raise Refused("règle introuvable (le pare-feu est-il actif ?)")
+            if rule["text"] != " ".join(args.expect.split()):
+                raise Refused("les règles ont changé entre-temps : recharge la page")
+            if rule["protected"]:
+                raise Refused("règle protégée (posée par firewall.sh) : modifie-la avec firewall.sh")
+            out = ufw("--force", "delete", str(args.number))
+            text = (out.stdout + out.stderr).strip()
+            if out.returncode != 0:
+                reply(False, f"Suppression refusée : {text}")
+            reply(True, f"Règle supprimée : {rule['text']}", command=f"ufw --force delete {args.number}")
+
+        if args.cmd == "enable":
+            if not ssh_reachable_after_enable():
+                raise Refused("aucune règle n'autorise SSH : applique d'abord la politique HOMEBOX")
+            out = ufw("--force", "enable")
+            reply(out.returncode == 0, (out.stdout + out.stderr).strip() or "Pare-feu activé", command="ufw --force enable")
+
+        if args.cmd == "disable":
+            out = ufw("disable")
+            reply(out.returncode == 0, (out.stdout + out.stderr).strip() or "Pare-feu désactivé", command="ufw disable")
+
+        if args.cmd == "policy":
+            if not os.path.isfile(POLICY_SCRIPT):
+                raise Refused(f"{POLICY_SCRIPT} absent : relance infra-docker.sh --tools-only")
+            cmd = ["bash", POLICY_SCRIPT] + (["--dry-run"] if args.dry_run else [])
+            out = run(cmd, timeout=120)
+            text = (out.stdout + out.stderr).strip()
+            reply(out.returncode == 0, text, command=" ".join(cmd))
+
+    except Refused as exc:
+        reply(False, str(exc))
+    except subprocess.TimeoutExpired:
+        reply(False, "délai dépassé")
+
+
+if __name__ == "__main__":
+    main()
