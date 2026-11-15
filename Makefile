@@ -19,7 +19,7 @@ INFRA_TARGETS := install-node install tools upgrade firewall firewall-check hard
                  remove-system-db status ps logs health timers tunnel \
                  backup backups verify restore-test restore-postgres restore-redis \
                  offsite-init offsite-status snapshots offsite-check \
-                 notify-test update-check update \
+                 notify-test update-check update disk-apm \
                  project-create project-list project-password project-drop \
                  site-add site-static site-list site-remove
 
