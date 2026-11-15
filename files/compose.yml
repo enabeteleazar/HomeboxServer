@@ -1,0 +1,163 @@
+name: homebox
+
+# Rotation des logs Docker (évite que les logs grossissent sans limite)
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # ========================================
+  # POSTGRESQL
+  # ========================================
+
+  postgres:
+
+    image: ${POSTGRES_IMAGE:-postgres:18}
+
+    container_name: homebox-postgres
+
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+    networks:
+      - homebox-network
+
+    logging: *default-logging
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ========================================
+  # REDIS
+  # ========================================
+
+  redis:
+
+    image: ${REDIS_IMAGE:-redis:8-alpine}
+
+    container_name: homebox-redis
+
+    restart: unless-stopped
+
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+
+    ports:
+      - "127.0.0.1:${REDIS_PORT}:6379"
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - homebox-network
+
+    logging: *default-logging
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========================================
+  # ADMINER
+  # ========================================
+
+  adminer:
+
+    image: ${ADMINER_IMAGE:-adminer:5}
+
+    container_name: homebox-adminer
+
+    restart: unless-stopped
+
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: pepa-linha
+
+    ports:
+      - "127.0.0.1:${ADMINER_PORT}:8080"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    networks:
+      - homebox-network
+
+    logging: *default-logging
+
+  # ========================================
+  # REDIS COMMANDER
+  # ========================================
+
+  redis-commander:
+
+    image: ${REDIS_COMMANDER_IMAGE:-rediscommander/redis-commander:latest}
+
+    container_name: homebox-redis-commander
+
+    restart: unless-stopped
+
+    environment:
+      REDIS_HOSTS: "homebox:redis:6379:0:${REDIS_PASSWORD}"
+
+    ports:
+      - "127.0.0.1:${REDIS_COMMANDER_PORT}:8081"
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    networks:
+      - homebox-network
+
+    logging: *default-logging
+
+# ========================================
+# VOLUMES PERSISTANTS
+# ========================================
+
+volumes:
+
+  postgres_data:
+    name: homebox-postgres-data
+
+  redis_data:
+    name: homebox-redis-data
+
+# ========================================
+# RESEAU
+# ========================================
+
+networks:
+
+  homebox-network:
+    name: homebox-network
+    driver: bridge
