@@ -7,6 +7,7 @@ disque, et un dashboard web pour suivre et piloter le tout.
 ```
 /srv/HomeboxServer/
 ├── Makefile      point d'entrée unique (make help)
+├── docs/         documentation du serveur (serveur.md)
 ├── infra/        partie root : installation, Docker (PostgreSQL, Redis…), outils homebox-*,
 │                 sauvegardes locales et externes, pare-feu, SSH, SMART, contrôle de santé
 └── dashboard/    application web (FastAPI) : vue d'ensemble, système, historique,
@@ -54,6 +55,9 @@ Puis `http://homebox:5199/overview` (réseau local ou Tailscale).
 
 ## Documentation détaillée
 
+- [docs/serveur.md](docs/serveur.md) : **la machine** — matériel, partitions, organisation
+  de `/srv`, versions, Docker, ports, sécurité, sauvegardes, surveillance, points en attente
+  (aussi accessible par `/srv/README.md`).
 - [infra/README.md](infra/README.md) : installation, sauvegardes et restauration, copie
   externe, pare-feu, SSH, SMART, alertes ntfy, mises à jour des conteneurs.
 - [dashboard/README.md](dashboard/README.md) : pages, registre des projets, API pour Neron,
