@@ -22,6 +22,19 @@ homebox-docker/
     └── templates/         # modèle compose.yml pour déployer un projet
 ```
 
+## Raccourcis (Makefile)
+
+Toutes les commandes de ce README existent aussi en version courte :
+
+```bash
+make                 # liste des commandes
+make status          # conteneurs, tâches planifiées, santé
+make backup          # sauvegarde immédiate
+make project-create NAME=monprojet
+make site-add DOMAIN=app.exemple.fr PORT=5190
+make logs SERVICE=postgres
+```
+
 ## Installation sur une machine neuve
 
 ```bash
