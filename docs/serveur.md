@@ -197,6 +197,7 @@ sudo homebox-restore postgres AAAAMMJJ-HHMMSS monprojet   # restauration réelle
 | Historique et tendances (remplissage des disques) | dashboard, page Historique | mesure toutes les 15 s, 90 jours |
 | Conteneurs, services, tâches planifiées | dashboard, pages Docker et Services | en direct |
 | Santé SMART du disque (+ auto-test hebdomadaire) | `homebox-smart`, page Système | toutes les heures |
+| Parcage des têtes limité (APM 254) | `homebox-disk-apm` (`make disk-apm`) | à chaque démarrage |
 | Contrôle de santé : disque, conteneurs, sauvegardes, pare-feu, SSH, seuils soutenus, certificats HTTPS | `homebox-healthcheck`, page Vue d'ensemble | toutes les 15 min |
 | Disponibilité des sites | Uptime Kuma | à configurer |
 
@@ -240,8 +241,9 @@ sudo ufw status verbose
 - [ ] **Copie externe des sauvegardes** à configurer (§8) — priorité, le disque est unique et âgé.
 - [ ] **Clé SSH** à ajouter (`ssh-copy-id` depuis ton poste), puis `make harden-ssh`.
 - [ ] **Pare-feu** à activer : `make firewall` (ou bouton sur la page Pare-feu).
-- [ ] **`make tools`** pour prendre en compte le nouveau chemin `/srv/Docker` avant la
-      sauvegarde de 03:30.
+- [ ] **Disque** : 376 secteurs réalloués, ≈ 1,9 million de parcages des têtes (≈ 3× l'usure
+      prévue), 4,4 ans de fonctionnement — fonctionne, mais en fin de vie. Parcage limité
+      depuis le 15/11 (`homebox-disk-apm`) ; prévoir son remplacement (SSD) et un second disque.
 - [ ] Mises à jour système en attente : `sudo apt upgrade`.
 - [ ] Anciennes sauvegardes du 31/10 au 15/11 supprimées : la première nouvelle sauvegarde
       sera celle de cette nuit (ou `make backup`).

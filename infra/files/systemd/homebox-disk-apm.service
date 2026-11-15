@@ -1,0 +1,12 @@
+[Unit]
+Description=Limite le parcage des têtes des disques mécaniques (APM 254)
+After=local-fs.target
+OnFailure=homebox-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homebox-disk-apm
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

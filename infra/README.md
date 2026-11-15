@@ -91,6 +91,7 @@ sont conservés, un `compose.yml` ou un `Caddyfile` modifié à la main n'est ja
 | `homebox-healthcheck.timer` : contrôle de santé + alertes | toutes les 15 min |
 | `homebox-restore-test.timer` : restauration à blanc + vérification restic | le 1er du mois |
 | `homebox-smart.timer` : santé SMART des disques (+ auto-test court hebdomadaire) | toutes les heures |
+| `homebox-disk-apm.service` : niveau APM 254 des disques mécaniques (pas de parcage agressif des têtes) | à chaque démarrage |
 
 Toute tâche qui échoue envoie une notification (`homebox-failure@.service`).
 
@@ -98,6 +99,11 @@ Toute tâche qui échoue envoie une notification (`homebox-failure@.service`).
 dashboard) et retient les compteurs précédents. Secteurs réalloués ou en attente en
 hausse, auto-test échoué ou panne annoncée par le disque : `homebox-healthcheck`
 envoie une alerte. Relevé manuel : `sudo homebox-smart --no-test`.
+
+**Parcage des têtes** : les disques d'ordinateur portable garent leurs têtes après
+quelques secondes d'inactivité, ce qui use un disque allumé en permanence (compteur
+SMART « cycles de parcage »). `homebox-disk-apm` règle leur niveau APM à 254 (performances
+maximales, sans parcage agressif) à chaque démarrage. État : `make disk-apm`.
 
 ## Accès
 

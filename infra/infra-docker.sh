@@ -417,7 +417,7 @@ install_tools() {
     install -o root -g root -m 0644 "$FILES_DIR/lib/common.sh" "$LIB_DIR/common.sh"
 
     local tool
-    for tool in backup restore healthcheck notify offsite update site firewall smart status; do
+    for tool in backup restore healthcheck notify offsite update site firewall smart status disk-apm; do
         install -o root -g root -m 0750 "$FILES_DIR/bin/homebox-$tool" "$SBIN_DIR/homebox-$tool"
     done
 
@@ -487,6 +487,11 @@ CONF
     if ! command -v smartctl >/dev/null 2>&1; then
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends smartmontools
     fi
+
+    # Parcage des têtes des disques mécaniques (homebox-disk-apm)
+    if ! command -v hdparm >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y hdparm
+    fi
 }
 
 # ==========================================================
@@ -506,6 +511,10 @@ install_systemd() {
         homebox-healthcheck.timer \
         homebox-restore-test.timer \
         homebox-smart.timer
+
+    # Niveau APM des disques mécaniques : appliqué maintenant et à chaque démarrage
+    systemctl enable homebox-disk-apm.service
+    systemctl restart homebox-disk-apm.service || true
 
     # Premier relevé SMART tout de suite (sans auto-test), pour le dashboard
     "$SBIN_DIR/homebox-smart" --no-test || true

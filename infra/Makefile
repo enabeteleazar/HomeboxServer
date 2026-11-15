@@ -26,7 +26,7 @@ require = $(if $($(1)),,$(error $(1) manquant. Exemple : $(2)))
         status ps logs health timers tunnel \
         backup backups verify restore-test restore-postgres restore-redis \
         offsite-init offsite-status snapshots offsite-check \
-        notify-test update update-check \
+        disk-apm notify-test update update-check \
         project-create project-list project-password project-drop \
         site-add site-static site-list site-remove \
         lint
@@ -132,6 +132,9 @@ offsite-check: ## Vérifie l'intégrité du dépôt externe
 	sudo homebox-offsite check
 
 # --- Maintenance ------------------------------------------------------
+
+disk-apm: ## Niveau APM des disques mécaniques (parcage des têtes)
+	@sudo homebox-disk-apm --status
 
 notify-test: ## Envoie une notification de test (ntfy)
 	sudo homebox-notify --test

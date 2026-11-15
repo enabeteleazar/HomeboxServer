@@ -1,0 +1,80 @@
+#!/bin/bash
+# ==========================================================
+# HOMEBOX DISK APM : limite le parcage des têtes des disques mécaniques
+#
+# Les disques d'ordinateur portable « garent » leurs têtes après quelques
+# secondes d'inactivité pour économiser l'énergie. Sur un serveur allumé en
+# permanence, cela use le disque (compteur SMART 193, Load_Cycle_Count).
+# Le niveau APM 254 garde les performances maximales sans parcage agressif.
+# Le réglage est perdu à l'extinction : homebox-disk-apm.service le
+# réapplique à chaque démarrage.
+#
+#   homebox-disk-apm            applique le niveau à tous les disques mécaniques
+#   homebox-disk-apm --status   affiche le niveau actuel sans rien changer
+#   APM_LEVEL=128 homebox-disk-apm   autre niveau (1-254, 255 = désactivé)
+# ==========================================================
+
+set -Euo pipefail
+
+LEVEL="${APM_LEVEL:-254}"
+STATUS_ONLY=false
+[ "${1:-}" = "--status" ] && STATUS_ONLY=true
+
+if [ "$EUID" -ne 0 ]; then
+    echo "Erreur : lance cette commande avec sudo." >&2
+    exit 1
+fi
+
+if ! command -v hdparm >/dev/null 2>&1; then
+    echo "Erreur : hdparm absent (sudo apt install hdparm)." >&2
+    exit 1
+fi
+
+if ! [[ "$LEVEL" =~ ^[0-9]+$ ]] || [ "$LEVEL" -lt 1 ] || [ "$LEVEL" -gt 255 ]; then
+    echo "Erreur : APM_LEVEL doit être entre 1 et 255." >&2
+    exit 1
+fi
+
+apm_level() {
+    # « APM_level = 128 » ou « APM_level = not supported »
+    hdparm -B "$1" 2>/dev/null | awk -F= '/APM_level/ {gsub(/[[:space:]]/, "", $2); print $2}'
+}
+
+found=false
+failed=false
+
+for block in /sys/block/sd* /sys/block/hd*; do
+    [ -e "$block" ] || continue
+    name="$(basename "$block")"
+    [ "$(cat "$block/queue/rotational" 2>/dev/null)" = "1" ] || continue
+    found=true
+    device="/dev/$name"
+    model="$(cat "$block/device/model" 2>/dev/null | xargs || true)"
+
+    before="$(apm_level "$device")"
+    if [ -z "$before" ] || [ "$before" = "notsupported" ]; then
+        echo "$device ($model) : gestion d'énergie APM non prise en charge, rien à faire"
+        continue
+    fi
+
+    if $STATUS_ONLY; then
+        echo "$device ($model) : niveau APM $before"
+        continue
+    fi
+
+    if [ "$before" = "$LEVEL" ]; then
+        echo "$device ($model) : niveau APM déjà à $LEVEL"
+        continue
+    fi
+
+    if hdparm -B "$LEVEL" "$device" >/dev/null 2>&1; then
+        echo "$device ($model) : niveau APM $before → $(apm_level "$device")"
+    else
+        echo "$device ($model) : impossible de régler le niveau APM" >&2
+        failed=true
+    fi
+done
+
+$found || echo "Aucun disque mécanique trouvé."
+$failed && exit 1
+exit 0

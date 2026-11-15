@@ -230,6 +230,7 @@ def main() -> int:
         hist = [h for h in history.get(name, []) if h.get("date") != today]
         hist.append({
             "date": today, "temperature": disk["temperature"], "power_on_hours": disk["power_on_hours"],
+            "load_cycles": disk["load_cycles"],
             **{f"a{w['id']}": w["raw"] for w in disk["watched"]},
         })
         disk["history"] = hist[-90:]
