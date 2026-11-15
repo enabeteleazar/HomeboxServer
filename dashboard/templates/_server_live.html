@@ -2,14 +2,25 @@
 {% set st = data.status %}
 {% set level_text = {"ok": "OK", "warn": "Attention", "crit": "Problème", "off": "Info", "unknown": "Inconnu"} %}
 
-<section class="tiles" aria-label="Voyants">
-  {% for t in data.tiles %}
-  <a class="tile tile-{{ t.level }}" href="{{ t.href }}">
-    <span class="tile-head"><span class="tile-label">{{ t.label }}</span>{{ ui.level_pill(t.level, level_text.get(t.level, t.level)) }}</span>
-    <span class="tile-value">{{ t.value }}</span>
-    <span class="tile-note">{{ t.note }}</span>
-  </a>
-  {% endfor %}
+<section class="card">
+  <div class="table-wrap">
+    <table class="table ov-table">
+      <thead><tr><th>Domaine</th><th>État</th><th>Valeur</th><th>Détail</th></tr></thead>
+      {% for group in data.groups %}
+      <tbody>
+        <tr class="ov-group-row"><th colspan="4" scope="colgroup">{{ group.title }}</th></tr>
+        {% for t in group.tiles %}
+        <tr data-href="{{ t.href }}">
+          <td data-label="Domaine"><a href="{{ t.href }}"><strong>{{ t.label }}</strong></a></td>
+          <td data-label="État">{{ ui.level_pill(t.level, level_text.get(t.level, t.level)) }}</td>
+          <td data-label="Valeur" class="ov-value">{{ t.value }}</td>
+          <td data-label="Détail"><span class="ov-note">{{ t.note }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      {% endfor %}
+    </table>
+  </div>
 </section>
 
 <section class="card">

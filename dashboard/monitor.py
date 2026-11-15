@@ -684,8 +684,15 @@ def overview(projects: list[dict]) -> dict:
     st = homebox_status()
     tiles = []
 
+    groups = {
+        "services": "services", "docker": "services", "projects": "services",
+        "backup": "protection", "offsite": "protection", "firewall": "protection", "ssh": "protection",
+        "certs": "protection",
+    }
+
     def tile(key, label, level, value, note, href):
-        tiles.append({"key": key, "label": label, "level": level, "value": value, "note": note, "href": href})
+        tiles.append({"key": key, "label": label, "level": level, "value": value, "note": note,
+                      "href": href, "group": groups.get(key, "machine")})
 
     cpu, mem = sysinfo["cpu"], sysinfo["memory"]
     tile("cpu", "Processeur", cpu["level"], f"{cpu['percent']:.0f} %", f"charge {cpu['load'][0]}", "/system")
@@ -757,8 +764,11 @@ def overview(projects: list[dict]) -> dict:
             tile("certs", "Certificats HTTPS", lvl, f"{len(certs)} site(s)",
                  f"le plus proche expire dans {soonest['days_left']} j" if soonest else "illisibles", "/overview#sites")
 
+    group_titles = [("machine", "Machine"), ("services", "Services et projets"), ("protection", "Protection")]
     return {
         "tiles": tiles,
+        "groups": [{"key": k, "title": t, "tiles": [x for x in tiles if x["group"] == k]}
+                   for k, t in group_titles if any(x["group"] == k for x in tiles)],
         "status": st,
         "level": _worst([t["level"] for t in tiles]),
         "problems": sum(1 for t in tiles if t["level"] in ("warn", "crit")),
