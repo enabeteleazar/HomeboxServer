@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Sauvegardes{% endblock %}
+{% block heading %}Sauvegardes{% endblock %}
+{% block subheading %}<p class="sub">{% if st.available %}État relevé {{ st.generated_at|ago }} par le contrôle de santé{% else %}État indisponible{% endif %}</p>{% endblock %}
+{% block page_actions %}
+<form method="post" action="/status/refresh"><input type="hidden" name="next" value="/backups">
+  <button class="btn" type="submit">{{ ui.icon("refresh") }}Actualiser l'état</button></form>
+<form method="post" action="/backups/run" data-confirm="Lancer une sauvegarde maintenant (bases, Redis, Uptime Kuma, puis copie externe) ?">
+  <button class="btn btn-primary" type="submit">{{ ui.icon("folder") }}Sauvegarder maintenant</button></form>
+{% endblock %}
+{% block content %}
+{% if not st.available %}
+<section class="card"><div class="card-body fw-setup">
+  <p class="auth-help">Les sauvegardes sont réservées à root : le dashboard lit l'état que le contrôle de santé publie
+    (sans aucun secret). Pour l'installer, sur homebox :</p>
+  <pre class="code mono">cd /srv/Projects/HomeboxServer && make tools</pre>
+</div></section>
+{% else %}
+{% set items = st.backups["items"] %}
+{% set last = items[0] if items else none %}
+{% set off = st.offsite %}
+{% set rt = st.restore_test %}
+<section class="stats">
+  <article class="stat {{ 'stat-alert' if not last }}">
+    <p class="stat-label">Dernière sauvegarde</p>
+    <p class="stat-value">{{ last.time|ago if last else "aucune" }}</p>
+    <p class="stat-note">{% if last %}{{ last.size|bytes }} · {{ last.databases|length }} base(s){% endif %}{% if st.backup_unit.next %} · prochaine {{ st.backup_unit.next|until }}{% endif %}</p>
+  </article>
+  <article class="stat">
+    <p class="stat-label">Conservées sur le disque</p>
+    <p class="stat-value">{{ st.backups.count }}</p>
+    <p class="stat-note">{{ st.backups.total_size|bytes }} au total</p>
+  </article>
+  <article class="stat {{ 'stat-alert' if not off.configured or not off.last }}">
+    <p class="stat-label">Copie externe</p>
+    <p class="stat-value">{{ (off.kind or "configurée") if off.configured else "aucune" }}</p>
+    <p class="stat-note">{% if not off.configured %}une panne du disque emporterait tout{% elif off.last %}dernier envoi {{ off.last|ago }}{% else %}jamais envoyée{% endif %}</p>
+  </article>
+  <article class="stat {{ 'stat-alert' if rt.result and rt.result != 'success' }}">
+    <p class="stat-label">Test de restauration</p>
+    <p class="stat-value">{{ "réussi" if rt.result == "success" and rt.last_exit else ("échec" if rt.result and rt.result != "success" else "jamais") }}</p>
+    <p class="stat-note">{% if rt.report %}{{ rt.report.backup }} · {% endif %}{% if rt.next %}prochain {{ rt.next|until }}{% endif %}</p>
+  </article>
+</section>
+
+{% if st.backup_unit.result and st.backup_unit.result != "success" %}
+<div class="flash flash-error" role="alert">{{ ui.icon("alert") }}<span>La dernière sauvegarde planifiée a échoué ({{ st.backup_unit.result }}). Détails : <span class="mono">sudo journalctl -u homebox-backup.service</span></span></div>
+{% endif %}
+{% if not off.configured %}
+<div class="flash flash-busy" role="status">{{ ui.icon("alert") }}<span>Copie externe non configurée : les sauvegardes sont sur le même disque que les données.
+  <span class="mono">sudo nano /etc/homebox/restic.env</span> puis <span class="mono">sudo homebox-offsite init</span>.</span></div>
+{% endif %}
+
+<section class="card">
+  <header class="card-head"><div><h2>Sauvegardes locales</h2>
+    <p class="card-sub"><span class="mono">{{ st.backups.directory }}</span> · chaque nuit vers 03:30, conservées 14 jours</p></div></header>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Sauvegarde</th><th>Contenu</th><th class="num">Taille</th><th>Intégrité</th></tr></thead>
+      <tbody>
+        {% for b in items %}
+        <tr>
+          <td data-label="Sauvegarde"><span class="mono">{{ b.name }}</span><span class="cell-sub">{{ b.time|ago }}</span></td>
+          <td data-label="Contenu"><div class="tag-list">
+            {% for db in b.databases %}<span class="tag mono">{{ db }}</span>{% endfor %}
+            {% if b.has_redis %}<span class="tag">Redis</span>{% endif %}{% if b.has_kuma %}<span class="tag">Uptime Kuma</span>{% endif %}
+          </div></td>
+          <td data-label="Taille" class="num">{{ b.size|bytes }}</td>
+          <td data-label="Intégrité">{{ ui.level_pill("ok" if b.verified else "warn", "sommes SHA256" if b.verified else "non vérifiable") }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4"><p class="empty">Aucune sauvegarde locale.</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <header class="card-head"><div><h2>Restaurer</h2><p class="card-sub">Volontairement en ligne de commande : une restauration écrase des données.</p></div></header>
+  <div class="card-body">
+    <pre class="code mono">sudo homebox-restore test                         # à blanc, sans risque
+sudo homebox-restore postgres {{ last.name if last else "AAAAMMJJ-HHMMSS" }} monprojet   # une base
+sudo homebox-restore redis</pre>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

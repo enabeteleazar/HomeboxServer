@@ -18,11 +18,13 @@
     </a>
 
     <nav class="nav">
+      <a class="nav-item {{ 'is-active' if nav == 'server' }}" href="/overview">{{ ui.icon("pulse") }}Vue d'ensemble</a>
       <a class="nav-item {{ 'is-active' if nav == 'overview' }}" href="/">{{ ui.icon("grid") }}Projets</a>
       <a class="nav-item {{ 'is-active' if nav == 'system' }}" href="/system">{{ ui.icon("cpu") }}Système</a>
       <a class="nav-item {{ 'is-active' if nav == 'history' }}" href="/history">{{ ui.icon("chart") }}Historique</a>
       <a class="nav-item {{ 'is-active' if nav == 'docker' }}" href="/docker">{{ ui.icon("box") }}Docker</a>
       <a class="nav-item {{ 'is-active' if nav == 'services' }}" href="/services">{{ ui.icon("layers") }}Services</a>
+      <a class="nav-item {{ 'is-active' if nav == 'backups' }}" href="/backups">{{ ui.icon("folder") }}Sauvegardes</a>
       <a class="nav-item {{ 'is-active' if nav == 'firewall' }}" href="/firewall">{{ ui.icon("shield") }}Pare-feu</a>
       <a class="nav-item {{ 'is-active' if nav == 'activity' }}" href="/activity">{{ ui.icon("pulse") }}Activité</a>
       <a class="nav-item {{ 'is-active' if nav == 'deployments' }}" href="/deployments">{{ ui.icon("rocket") }}Déploiements</a>

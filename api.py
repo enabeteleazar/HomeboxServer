@@ -202,3 +202,10 @@ def metrics_history(range: str = Query("24h", description="1h | 6h | 24h | 7d | 
     import metrics
 
     return metrics.series(range)
+
+
+@secured.get("/overview", summary="Vue d'ensemble : un voyant par domaine (système, disque, services, Docker, sauvegardes, sécurité…) et alertes en cours")
+def server_overview() -> dict:
+    import monitor
+
+    return monitor.overview(services.list_projects())

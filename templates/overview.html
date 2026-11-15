@@ -126,6 +126,9 @@
           <td data-label="Service">
             {{ ui.service_pill(p) }}
             {% if p.port %}<span class="mono cell-sub">:{{ p.port }}</span>{% endif %}
+            {% set rt = runtime.get(p.name) if runtime else none %}
+            {% if rt %}<span class="cell-sub" title="Processeur · mémoire · temps de réponse">
+              {% if rt.cpu is not none %}{{ rt.cpu|pct }} · {{ rt.memory|bytes }} · {% endif %}{% if rt.http.ms is not none %}{{ rt.http.ms }} ms{% else %}ne répond pas{% endif %}</span>{% endif %}
           </td>
           <td data-label="Git">
             {{ ui.git_pill(p.git) }}

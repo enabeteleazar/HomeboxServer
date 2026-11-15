@@ -326,6 +326,7 @@ def overview(request: Request):
     return render(
         request, "overview.html", nav="overview",
         projects=projects,
+        runtime=monitor.projects_runtime(projects),
         summary=services.summary(),
         activity=journal.list_activity(limit=8),
     )
@@ -337,8 +338,9 @@ def project_page(request: Request, name: str):
         project = services.get_project(name, host=request.url.hostname)
     except services.ServiceError as exc:
         return back("/", exc.message, "error")
+    runtime = monitor.project_runtime(project.get("port")) if project.get("up") else None
     return render(
-        request, "project.html", nav="overview", project=project,
+        request, "project.html", nav="overview", project=project, runtime=runtime,
         logs=services.read_logs(name, lines=200),
     )
 
@@ -376,7 +378,12 @@ def deployments_page(request: Request, project: Optional[str] = None, environmen
 # fragment « /…/live » toutes les quelques secondes (en pause si l'onglet
 # est caché).
 
+def _server_overview() -> dict:
+    return monitor.overview(services.list_projects())
+
+
 LIVE_PAGES = {
+    "server": ("server.html", "_server_live.html", _server_overview, 15),
     "system": ("system.html", "_system_live.html", monitor.system, 5),
     "docker": ("docker.html", "_docker_live.html", monitor.docker, 10),
     "services": ("services.html", "_services_live.html", monitor.services, 15),
@@ -391,6 +398,60 @@ def _live_page(request: Request, key: str):
 def _live_fragment(request: Request, key: str):
     _, fragment, collect, _ = LIVE_PAGES[key]
     return templates.TemplateResponse(request, fragment, {"data": collect()})
+
+
+@app.get("/overview", response_class=HTMLResponse, include_in_schema=False)
+def server_page(request: Request):
+    return _live_page(request, "server")
+
+
+@app.get("/overview/live", response_class=HTMLResponse, include_in_schema=False)
+def server_live(request: Request):
+    return _live_fragment(request, "server")
+
+
+# --- sauvegardes ----------------------------------------------------------
+
+# Seules commandes root que le dashboard peut lancer en plus de homebox-firewall
+# (/etc/sudoers.d/homebox-firewall, installé par « make tools » dans le kit).
+ROOT_COMMANDS = {
+    "backup": ["/usr/bin/systemctl", "start", "--no-block", "homebox-backup.service"],
+    "refresh": ["/usr/bin/systemctl", "start", "--no-block", "homebox-healthcheck.service"],
+}
+
+
+def _root_command(key: str, label: str) -> tuple[bool, str]:
+    import subprocess
+
+    activity_id = journal.start_activity(None, key, "dashboard")
+    try:
+        proc = subprocess.run(["sudo", "-n", *ROOT_COMMANDS[key]], capture_output=True, text=True, timeout=30)
+        ok, output = proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        ok, output = False, str(exc)
+    journal.finish_activity(activity_id, ok, 0 if ok else 1, f"$ {' '.join(ROOT_COMMANDS[key])}\n{output}", 0)
+    if ok:
+        return True, label
+    if "password" in output or "not allowed" in output or "interactive" in output:
+        return False, "Le dashboard n'a pas encore ce droit : cd /srv/Projects/HomeboxServer && make tools"
+    return False, f"Échec : {output[:200]}"
+
+
+@app.get("/backups", response_class=HTMLResponse, include_in_schema=False)
+def backups_page(request: Request):
+    return render(request, "backups.html", nav="backups", st=monitor.homebox_status())
+
+
+@app.post("/backups/run", include_in_schema=False)
+def backups_run():
+    ok, message = _root_command("backup", "Sauvegarde lancée : elle apparaîtra ici dans une à deux minutes (actualise l'état ensuite)")
+    return back("/backups", message, "ok" if ok else "error")
+
+
+@app.post("/status/refresh", include_in_schema=False)
+def status_refresh(next: str = Form("/overview")):
+    ok, message = _root_command("refresh", "Contrôle de santé lancé : actualise la page dans quelques secondes")
+    return back(_safe_next(next), message, "ok" if ok else "error")
 
 
 @app.get("/system", response_class=HTMLResponse, include_in_schema=False)

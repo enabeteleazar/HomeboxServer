@@ -405,9 +405,17 @@ def docker() -> dict:
         if health in ("none", ""):
             health = "healthy" if "(healthy)" in c.get("Status", "") else \
                      "unhealthy" if "(unhealthy)" in c.get("Status", "") else ""
-        status_level = ("crit" if state in ("exited", "dead") or health == "unhealthy"
-                        else "warn" if state in ("restarting", "paused", "created") or health == "starting"
-                        else "ok")
+        project = labels.get("com.docker.compose.project", "")
+        # Un conteneur arrêté n'est un problème que s'il fait partie de
+        # l'infrastructure HOMEBOX : ailleurs, c'est souvent un arrêt voulu.
+        if health == "unhealthy" or state == "dead" or (state == "exited" and project == "homebox"):
+            status_level = "crit"
+        elif state in ("restarting", "paused") or health == "starting":
+            status_level = "warn"
+        elif state in ("exited", "created"):
+            status_level = "off"
+        else:
+            status_level = "ok"
         ports = sorted({m.group(0) for m in re.finditer(r"[0-9a-fA-F.:\[\]]*:\d+->\d+/\w+", c.get("Ports", ""))})
         containers.append({
             "name": name, "image": c.get("Image", ""), "state": state, "status": c.get("Status", ""),
@@ -432,7 +440,7 @@ def docker() -> dict:
     return {
         "available": True, "version": version, "containers": containers,
         "running": running, "total": len(containers),
-        "problems": sum(1 for c in containers if c["level"] != "ok"),
+        "problems": sum(1 for c in containers if c["level"] in ("warn", "crit")),
         "disk": disk, "volumes": volumes,
         "stats_age": int(time.time() - _docker["at"]) if _docker["at"] else None,
     }
@@ -549,4 +557,209 @@ def summary() -> dict:
         "disk_level": max((d["level"] for d in s["disks"]), key=["ok", "warn", "crit"].index, default="ok"),
         "temperature": s["cpu"]["temperature"], "temperature_level": s["cpu"]["temperature_level"],
         "uptime_seconds": s["uptime_seconds"],
+    }
+
+
+# --- état public écrit par homebox-status (kit HomeboxServer) ---------------
+
+STATUS_FILE = "/var/lib/homebox/status.json"
+
+
+def homebox_status() -> dict:
+    try:
+        with open(STATUS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {"available": False}
+    except (OSError, json.JSONDecodeError):
+        return {"available": False}
+    age = int(time.time()) - int(data.get("generated_ts") or 0)
+    data.update(available=True, age_seconds=age, stale=age > 45 * 60)
+    return data
+
+
+# --- projets : processus, consommation, temps de réponse --------------------
+
+_proc_cache: dict[int, psutil.Process] = {}
+_probe_cache: dict[int, tuple[float, dict]] = {}
+PROBE_TTL = 20
+
+
+def _listening_pids() -> dict[int, int]:
+    """Port TCP en écoute → PID (visible seulement pour nos propres processus)."""
+    result = {}
+    try:
+        for conn in psutil.net_connections(kind="tcp"):
+            if conn.status == psutil.CONN_LISTEN and conn.pid and conn.laddr:
+                result.setdefault(conn.laddr.port, conn.pid)
+    except (psutil.Error, OSError):
+        pass
+    return result
+
+
+def _process_tree(pid: int) -> list[psutil.Process]:
+    """Le processus et ses enfants, en réutilisant les objets déjà vus
+    (cpu_percent a besoin de deux lectures sur le même objet)."""
+    procs = []
+    try:
+        top = _proc_cache.get(pid) or psutil.Process(pid)
+        _proc_cache[pid] = top
+        procs.append(top)
+        for child in top.children(recursive=True):
+            procs.append(_proc_cache.setdefault(child.pid, child))
+    except psutil.Error:
+        _proc_cache.pop(pid, None)
+    return procs
+
+
+def _probe_http(port: int) -> dict:
+    cached = _probe_cache.get(port)
+    if cached and time.time() - cached[0] < PROBE_TTL:
+        return cached[1]
+    import http.client
+    started = time.monotonic()
+    result: dict
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        conn.request("GET", "/", headers={"User-Agent": "srv-dashboard/monitor"})
+        response = conn.getresponse()
+        response.read(65536)
+        conn.close()
+        result = {"ok": response.status < 500, "status": response.status,
+                  "ms": round((time.monotonic() - started) * 1000)}
+    except (OSError, http.client.HTTPException) as exc:
+        result = {"ok": False, "status": None, "ms": None, "error": str(exc)[:120]}
+    result["level"] = ("crit" if not result["ok"] else
+                       "warn" if (result["ms"] or 0) > 1500 else "ok")
+    _probe_cache[port] = (time.time(), result)
+    return result
+
+
+def project_runtime(port: Optional[int], pids: Optional[dict[int, int]] = None) -> Optional[dict]:
+    if not port:
+        return None
+    pids = _listening_pids() if pids is None else pids
+    pid = pids.get(int(port))
+    runtime: dict = {"pid": pid, "cpu": None, "memory": None, "processes": 0, "started": None, "command": ""}
+    if pid:
+        procs = _process_tree(pid)
+        cpu = mem = 0.0
+        for p in procs:
+            try:
+                cpu += p.cpu_percent(None)
+                mem += p.memory_info().rss
+            except psutil.Error:
+                continue
+        runtime.update(cpu=round(cpu, 1), memory=int(mem), processes=len(procs))
+        try:
+            runtime["started"] = datetime.fromtimestamp(procs[0].create_time(), timezone.utc).isoformat()
+            runtime["command"] = " ".join(procs[0].cmdline())[:160]
+        except (psutil.Error, IndexError):
+            pass
+    runtime["http"] = _probe_http(int(port))
+    return runtime
+
+
+def projects_runtime(projects: list[dict]) -> dict[str, dict]:
+    """Consommation et temps de réponse des projets en ligne (sondes en parallèle)."""
+    from concurrent.futures import ThreadPoolExecutor
+    pids = _listening_pids()
+    running = [p for p in projects if p.get("up") and p.get("port")]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = pool.map(lambda p: (p["name"], project_runtime(p["port"], pids)), running)
+    return dict(results)
+
+
+# --- vue d'ensemble : un voyant par domaine ---------------------------------
+
+def _worst(levels: list[str]) -> str:
+    order = ["ok", "off", "unknown", "warn", "crit"]
+    return max(levels or ["ok"], key=lambda l: order.index(l) if l in order else 0)
+
+
+def overview(projects: list[dict]) -> dict:
+    sysinfo = system()
+    svc = services()
+    dock = docker()
+    st = homebox_status()
+    tiles = []
+
+    def tile(key, label, level, value, note, href):
+        tiles.append({"key": key, "label": label, "level": level, "value": value, "note": note, "href": href})
+
+    cpu, mem = sysinfo["cpu"], sysinfo["memory"]
+    tile("cpu", "Processeur", cpu["level"], f"{cpu['percent']:.0f} %", f"charge {cpu['load'][0]}", "/system")
+    tile("mem", "Mémoire", mem["level"], f"{mem['percent']:.0f} %", "hors cache", "/system")
+    fullest = max(sysinfo["disks"], key=lambda d: d["percent"], default=None)
+    if fullest:
+        tile("disk", "Disque", fullest["level"], f"{fullest['percent']:.0f} %", f"{fullest['mount']} le plus rempli", "/history")
+    if cpu["temperature"] is not None:
+        tile("temp", "Température", cpu["temperature_level"], f"{cpu['temperature']:.0f} °C", "processeur", "/system")
+
+    sm = sysinfo.get("smart") or {}
+    if sm.get("available"):
+        tile("smart", "Santé du disque", "warn" if sm.get("stale") and sm["status"] == "ok" else sm["status"],
+             {"ok": "Bonne", "warn": "À surveiller", "crit": "En danger"}.get(sm["status"], "?"),
+             "relevé SMART " + ("ancien" if sm.get("stale") else "récent"), "/system")
+    else:
+        tile("smart", "Santé du disque", "unknown", "?", "relevé SMART non installé", "/system")
+
+    svc_bad = [s for s in svc["services"] if s["level"] in ("crit", "warn")]
+    tile("services", "Services", "crit" if svc["failed"] or any(s["level"] == "crit" for s in svc_bad) else
+         ("warn" if svc_bad or svc["problems"] else "ok"),
+         f"{sum(1 for s in svc['services'] if s['active'] == 'active')}/{len(svc['services'])}",
+         f"{svc['problems']} problème(s)" if svc["problems"] else "tous actifs", "/services")
+
+    if dock.get("available"):
+        tile("docker", "Docker", "warn" if dock["problems"] else "ok", f"{dock['running']}/{dock['total']}",
+             f"{dock['problems']} à regarder" if dock["problems"] else "conteneurs en marche", "/docker")
+    else:
+        tile("docker", "Docker", "crit", "—", "Docker ne répond pas", "/docker")
+
+    up = sum(1 for p in projects if p.get("up"))
+    tile("projects", "Projets en ligne", "ok", f"{up}/{len(projects)}", "serveurs de dev et sites", "/")
+
+    upd = sysinfo.get("updates")
+    if upd is not None:
+        lvl = "crit" if sysinfo["reboot_required"] else ("warn" if upd["security"] else ("off" if upd["count"] else "ok"))
+        tile("updates", "Mises à jour", lvl, str(upd["count"]),
+             ("redémarrage requis · " if sysinfo["reboot_required"] else "") +
+             (f"dont {upd['security']} de sécurité" if upd["security"] else "en attente"), "/system")
+
+    if st.get("available"):
+        items = st["backups"]["items"]
+        if items:
+            age_h = (time.time() - datetime.fromisoformat(items[0]["time"]).timestamp()) / 3600
+            lvl = "ok" if age_h <= 26 else ("warn" if age_h <= 50 else "crit")
+            tile("backup", "Dernière sauvegarde", lvl, f"il y a {int(age_h)} h" if age_h >= 1 else "à l'instant",
+                 f"{st['backups']['count']} conservées", "/backups")
+        else:
+            tile("backup", "Dernière sauvegarde", "crit", "aucune", "aucune sauvegarde locale", "/backups")
+        off = st["offsite"]
+        if not off["configured"]:
+            tile("offsite", "Copie externe", "warn", "non configurée", "une panne de disque emporterait tout", "/backups")
+        else:
+            last = off.get("last")
+            age_h = (time.time() - datetime.fromisoformat(last).timestamp()) / 3600 if last else None
+            tile("offsite", "Copie externe", "ok" if age_h is not None and age_h <= 26 else "crit",
+                 off["kind"] or "configurée", f"il y a {int(age_h)} h" if age_h is not None else "jamais envoyée", "/backups")
+        sec = st["security"]
+        tile("firewall", "Pare-feu", "ok" if sec["ufw_active"] else "crit", "actif" if sec["ufw_active"] else "inactif",
+             f"{sec['fail2ban_banned']} adresse(s) bannie(s)", "/firewall")
+        ssh_lvl = "crit" if sec["ssh_root_login"] else ("warn" if sec["ssh_password_auth"] else "ok")
+        tile("ssh", "SSH", ssh_lvl, "clés uniquement" if not sec["ssh_password_auth"] else "mots de passe acceptés",
+             "connexion root " + ("autorisée" if sec["ssh_root_login"] else "interdite"), "/overview#securite")
+        certs = st.get("certificates") or []
+        if certs:
+            soonest = min((c for c in certs if c.get("ok")), key=lambda c: c["days_left"], default=None)
+            bad = [c for c in certs if not c.get("ok")]
+            lvl = "crit" if bad or (soonest and soonest["days_left"] < 7) else ("warn" if soonest and soonest["days_left"] < 14 else "ok")
+            tile("certs", "Certificats HTTPS", lvl, f"{len(certs)} site(s)",
+                 f"le plus proche expire dans {soonest['days_left']} j" if soonest else "illisibles", "/overview#sites")
+
+    return {
+        "tiles": tiles,
+        "status": st,
+        "level": _worst([t["level"] for t in tiles]),
+        "problems": sum(1 for t in tiles if t["level"] in ("warn", "crit")),
     }

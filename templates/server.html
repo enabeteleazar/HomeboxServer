@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Vue d'ensemble{% endblock %}
+{% block heading %}Vue d'ensemble{% endblock %}
+{% block subheading %}<p class="sub">L'état de tout le serveur d'un coup d'œil — chaque voyant mène au détail.</p>{% endblock %}
+{% block page_actions %}
+{% include "_live_badge.html" %}
+<form method="post" action="/status/refresh"><input type="hidden" name="next" value="/overview">
+  <button class="btn" type="submit">{{ ui.icon("refresh") }}Relancer le contrôle</button></form>
+{% endblock %}
+{% block content %}
+<div class="live-stack" data-live-src="/overview/live" data-live-interval="{{ live_interval }}">
+{% include "_server_live.html" %}
+</div>
+{% endblock %}

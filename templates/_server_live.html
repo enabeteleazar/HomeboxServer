@@ -1,0 +1,72 @@
+{% import "_macros.html" as ui %}
+{% set st = data.status %}
+{% set level_text = {"ok": "OK", "warn": "Attention", "crit": "Problème", "off": "Info", "unknown": "Inconnu"} %}
+
+<section class="tiles" aria-label="Voyants">
+  {% for t in data.tiles %}
+  <a class="tile tile-{{ t.level }}" href="{{ t.href }}">
+    <span class="tile-head"><span class="tile-label">{{ t.label }}</span>{{ ui.level_pill(t.level, level_text.get(t.level, t.level)) }}</span>
+    <span class="tile-value">{{ t.value }}</span>
+    <span class="tile-note">{{ t.note }}</span>
+  </a>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <header class="card-head"><div>
+    <h2>Alertes en cours</h2>
+    <p class="card-sub">{% if st.available %}Dernier contrôle {{ st.generated_at|ago }} · envoyées sur ntfy à l'apparition, puis rappel toutes les 24 h{% else %}Contrôle de santé non relié au dashboard{% endif %}</p>
+  </div></header>
+  <div class="card-body">
+    {% if not st.available %}
+    <p class="auth-help">Le contrôle de santé (toutes les 15 min, en root) n'écrit pas encore son état pour le dashboard. Sur homebox :</p>
+    <pre class="code mono">cd /srv/Projects/HomeboxServer && make tools</pre>
+    {% elif st.issues %}
+    <ul class="smart-findings">
+      {% for issue in st.issues %}<li>{{ ui.level_pill("crit", "alerte") }} {{ issue }}</li>{% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">{{ ui.icon("check") }} Aucune alerte : tout va bien.</p>
+    {% endif %}
+    {% if st.available and st.stale %}<p class="hint">Attention : ce contrôle date de plus de 45 min (homebox-healthcheck.timer ?).</p>{% endif %}
+  </div>
+</section>
+
+{% if st.available %}
+<section class="grid-2">
+  <article class="card" id="securite">
+    <header class="card-head"><div><h2>Sécurité</h2><p class="card-sub">Points de contrôle du serveur</p></div></header>
+    <div class="card-body">
+      {% set sec = st.security %}
+      <ul class="checklist">
+        <li>{{ ui.level_pill("ok" if sec.ufw_active else "crit", "oui" if sec.ufw_active else "non") }} Pare-feu actif <a class="link" href="/firewall">détail</a></li>
+        <li>{{ ui.level_pill("ok" if not sec.ssh_password_auth else "warn", "oui" if not sec.ssh_password_auth else "non") }} SSH par clés uniquement{% if sec.ssh_keys is not none %} <span class="cell-sub">{{ sec.ssh_keys }} clé(s) autorisée(s){% if sec.ssh_keys == 0 %} — ajoute la tienne avec ssh-copy-id avant harden-ssh.sh{% endif %}</span>{% endif %}</li>
+        <li>{{ ui.level_pill("ok" if not sec.ssh_root_login else "crit", "oui" if not sec.ssh_root_login else "non") }} Connexion SSH de root interdite</li>
+        <li>{{ ui.level_pill("ok" if sec.fail2ban_running else "warn", "oui" if sec.fail2ban_running else "non") }} Fail2ban actif <span class="cell-sub">{{ sec.fail2ban_banned }} adresse(s) bannie(s)</span></li>
+        <li>{{ ui.level_pill("ok" if sec.unattended_upgrades else "warn", "oui" if sec.unattended_upgrades else "non") }} Mises à jour de sécurité automatiques</li>
+        <li>{{ ui.level_pill("off", "info") }} Groupe docker (équivalent root) : <span class="mono">{{ sec.docker_group|join(", ") or "personne" }}</span></li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="card" id="sites">
+    <header class="card-head"><div><h2>Sites HTTPS</h2><p class="card-sub">Certificats servis par Caddy (renouvelés automatiquement)</p></div></header>
+    <div class="card-body">
+      {% if st.certificates %}
+      <ul class="checklist">
+        {% for c in st.certificates %}
+        <li>
+          {% if c.ok %}{{ ui.level_pill("ok" if c.days_left >= 14 else ("warn" if c.days_left >= 7 else "crit"), c.days_left ~ " j") }}
+          {% else %}{{ ui.level_pill("crit", "erreur") }}{% endif %}
+          <span class="mono">{{ c.domain }}</span>
+          <span class="cell-sub">{% if c.ok %}expire le {{ c.expires|dt }} · {{ c.issuer }}{% else %}{{ c.error }}{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">Aucun site publié. <span class="mono">sudo homebox-site add domaine.fr 5190</span></p>
+      {% endif %}
+    </div>
+  </article>
+</section>
+{% endif %}
