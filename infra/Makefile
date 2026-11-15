@@ -7,7 +7,7 @@
 SHELL        := /bin/bash
 .DEFAULT_GOAL := help
 
-DOCKER_DIR   := /srv/docker
+DOCKER_DIR   := /srv/Docker
 COMPOSE      := docker compose --project-name homebox --env-file $(DOCKER_DIR)/.env -f $(DOCKER_DIR)/compose.yml
 
 # Valeurs par défaut des variables

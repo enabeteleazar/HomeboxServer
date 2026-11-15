@@ -76,7 +76,7 @@ sont conservés, un `compose.yml` ou un `Caddyfile` modifié à la main n'est ja
 
 | Élément | Emplacement |
 |---|---|
-| Compose et `.env` (identifiants) | `/srv/docker/` |
+| Compose et `.env` (identifiants) | `/srv/Docker/` |
 | Réglages (ntfy, seuils d'alerte) | `/etc/homebox/homebox.conf` |
 | Copie externe (restic) | `/etc/homebox/restic.env`, `/etc/homebox/restic.pass` |
 | Outils root | `/usr/local/sbin/homebox-*` |
@@ -204,7 +204,7 @@ Pour Redis, l'ancien contenu reste dans le volume (`pre-restore-*`).
 
 1. Réinstalle avec `install-node.sh`, recrée `/etc/homebox/restic.env` et `restic.pass`.
 2. `sudo homebox-offsite restore latest /root/recup`
-3. Copie `env.backup` en `/srv/docker/.env` (le mot de passe PostgreSQL n'est lu
+3. Copie `env.backup` en `/srv/Docker/.env` (le mot de passe PostgreSQL n'est lu
    qu'à l'initialisation du volume), puis `sudo bash ./infra-docker.sh`.
 4. `sudo homebox-restore postgres /root/recup/srv/backups/homebox/<horodatage>`,
    puis `sudo homebox-restore redis` avec le même chemin.
@@ -241,7 +241,7 @@ une sauvegarde/restauration, pas un simple changement de tag.
 ## Commandes utiles
 
 ```bash
-cd /srv/docker
+cd /srv/Docker
 docker compose --env-file .env ps
 docker compose --env-file .env logs -f postgres
 systemctl list-timers 'homebox-*'

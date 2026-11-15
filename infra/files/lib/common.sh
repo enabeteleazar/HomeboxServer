@@ -7,7 +7,7 @@
 HOMEBOX_CONF_DIR="${HOMEBOX_CONF_DIR:-/etc/homebox}"
 
 # Valeurs par défaut (paths.conf, régénéré par infra-docker.sh, les remplace)
-BASE_DIR="${BASE_DIR:-/srv/docker}"
+BASE_DIR="${BASE_DIR:-/srv/Docker}"
 BACKUP_DIR="${BACKUP_DIR:-/srv/backups/homebox}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 STATE_DIR="${STATE_DIR:-/var/lib/homebox}"

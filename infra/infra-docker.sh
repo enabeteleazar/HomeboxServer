@@ -26,7 +26,7 @@ case "${1:-}" in
 esac
 FILES_DIR="$SCRIPT_DIR/files"
 
-BASE_DIR="${BASE_DIR:-/srv/docker}"
+BASE_DIR="${BASE_DIR:-/srv/Docker}"
 BACKUP_DIR="${BACKUP_DIR:-/srv/backups/homebox}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 
