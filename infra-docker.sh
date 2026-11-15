@@ -417,7 +417,7 @@ install_tools() {
     install -o root -g root -m 0644 "$FILES_DIR/lib/common.sh" "$LIB_DIR/common.sh"
 
     local tool
-    for tool in backup restore healthcheck notify offsite update site firewall smart; do
+    for tool in backup restore healthcheck notify offsite update site firewall smart status; do
         install -o root -g root -m 0750 "$FILES_DIR/bin/homebox-$tool" "$SBIN_DIR/homebox-$tool"
     done
 
@@ -433,8 +433,11 @@ install_tools() {
     sudoers_tmp="$(mktemp)"
     cat > "$sudoers_tmp" <<SUDOERS
 # HOMEBOX : géré par infra-docker.sh
-# Le dashboard peut lire et modifier le pare-feu via homebox-firewall (et rien d'autre).
+# Le dashboard peut : piloter le pare-feu via homebox-firewall (qui valide tout),
+# lancer une sauvegarde et rafraîchir l'état du serveur. Rien d'autre.
 $TARGET_USER ALL=(root) NOPASSWD: $SBIN_DIR/homebox-firewall
+$TARGET_USER ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block homebox-backup.service
+$TARGET_USER ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block homebox-healthcheck.service
 SUDOERS
     if visudo -cf "$sudoers_tmp" >/dev/null; then
         install -o root -g root -m 0440 "$sudoers_tmp" /etc/sudoers.d/homebox-firewall
@@ -452,6 +455,7 @@ BASE_DIR="$BASE_DIR"
 BACKUP_DIR="$BACKUP_DIR"
 RETENTION_DAYS="$RETENTION_DAYS"
 STATE_DIR="$STATE_DIR"
+HOMEBOX_USER="$TARGET_USER"
 CONF
     chmod 600 "$CONF_DIR/paths.conf"
 

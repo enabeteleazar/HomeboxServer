@@ -168,6 +168,17 @@ if [ "$SSH_CHECK" = "true" ] && command -v sshd >/dev/null 2>&1; then
 fi
 
 # ----------------------------------------------------------
+# Seuils soutenus (historique du dashboard) et certificats HTTPS
+# ----------------------------------------------------------
+
+STATUS_BIN="${HOMEBOX_STATUS_BIN:-/usr/local/sbin/homebox-status}"
+if [ -x "$STATUS_BIN" ]; then
+    while IFS= read -r line; do
+        [ -n "$line" ] && add_issue "$line"
+    done < <("$STATUS_BIN" checks 2>/dev/null || true)
+fi
+
+# ----------------------------------------------------------
 # Rapport et notifications
 # ----------------------------------------------------------
 
@@ -178,6 +189,11 @@ if [ -z "$current" ]; then
 else
     echo "HOMEBOX : ${#issues[@]} problème(s)"
     echo "$current" | sed 's/^/  - /'
+fi
+
+# État public pour le dashboard (/var/lib/homebox/status.json, sans secret)
+if [ -x "$STATUS_BIN" ]; then
+    printf '%s\n' "$current" | "$STATUS_BIN" write || echo "Écriture de status.json impossible." >&2
 fi
 
 $NOTIFY || exit 0

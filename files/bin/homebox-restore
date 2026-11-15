@@ -179,6 +179,12 @@ cmd_test() {
     echo ""
     echo "Test de restauration réussi : $(basename "$dir")"
 
+    # Compte rendu lu par le dashboard (via homebox-status)
+    install -d -m 0755 "$STATE_DIR"
+    printf '{"ts": %s, "backup": "%s", "report": "%s"}\n' \
+        "$(date +%s)" "$(basename "$dir")" "${report//\"/}" > "$STATE_DIR/restore-test.json"
+    chmod 644 "$STATE_DIR/restore-test.json"
+
     if $NOTIFY; then
         notify "Test de restauration OK" "Sauvegarde $(basename "$dir") : $report" 2 "white_check_mark"
     fi
