@@ -3,6 +3,9 @@
 # HOMEBOX DOCKER INFRASTRUCTURE
 # Ubuntu 26.04 LTS
 # Usage : sudo bash ./infra-docker.sh
+#         sudo bash ./infra-docker.sh --tools-only   (outils, sudoers et tâches
+#                                                     planifiées seulement, sans
+#                                                     toucher aux conteneurs)
 # (lancer depuis le dossier du projet : il utilise ./files/)
 # Relançable : sert aussi à mettre à jour une installation existante.
 # ==========================================================
@@ -14,6 +17,13 @@ set -Eeuo pipefail
 # ==========================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+TOOLS_ONLY=false
+case "${1:-}" in
+    --tools-only) TOOLS_ONLY=true ;;
+    "") ;;
+    *) echo "Option inconnue : $1 (seule option : --tools-only)"; exit 1 ;;
+esac
 FILES_DIR="$SCRIPT_DIR/files"
 
 BASE_DIR="${BASE_DIR:-/srv/docker}"
@@ -407,12 +417,33 @@ install_tools() {
     install -o root -g root -m 0644 "$FILES_DIR/lib/common.sh" "$LIB_DIR/common.sh"
 
     local tool
-    for tool in backup restore healthcheck notify offsite update site; do
+    for tool in backup restore healthcheck notify offsite update site firewall; do
         install -o root -g root -m 0750 "$FILES_DIR/bin/homebox-$tool" "$SBIN_DIR/homebox-$tool"
     done
 
     # Utilisable sans sudo (membres du groupe docker)
     install -o root -g root -m 0755 "$FILES_DIR/bin/homebox-project" "$BIN_DIR/homebox-project"
+
+    # Politique pare-feu, appelée par homebox-firewall (page Firewall du dashboard)
+    install -o root -g root -m 0644 "$SCRIPT_DIR/firewall.sh" "$LIB_DIR/firewall.sh"
+
+    # Le dashboard (qui tourne sous $TARGET_USER) pilote UFW via homebox-firewall,
+    # et uniquement lui : ce script valide lui-même tous ses arguments.
+    local sudoers_tmp
+    sudoers_tmp="$(mktemp)"
+    cat > "$sudoers_tmp" <<SUDOERS
+# HOMEBOX : géré par infra-docker.sh
+# Le dashboard peut lire et modifier le pare-feu via homebox-firewall (et rien d'autre).
+$TARGET_USER ALL=(root) NOPASSWD: $SBIN_DIR/homebox-firewall
+SUDOERS
+    if visudo -cf "$sudoers_tmp" >/dev/null; then
+        install -o root -g root -m 0440 "$sudoers_tmp" /etc/sudoers.d/homebox-firewall
+    else
+        echo "Règle sudoers invalide : non installée."
+        rm -f "$sudoers_tmp"
+        return 1
+    fi
+    rm -f "$sudoers_tmp"
 
     # Chemins partagés par tous les outils (réécrit à chaque exécution)
     cat > "$CONF_DIR/paths.conf" <<CONF
@@ -439,7 +470,7 @@ CONF
     fi
     install -o root -g root -m 0600 "$FILES_DIR/config/restic.env.example" "$CONF_DIR/restic.env.example"
 
-    if ! grep -qE '^RESTIC_REPOSITORY=.+' "$CONF_DIR/restic.env"; then
+    if [ -z "$(HOMEBOX_CONF_DIR="$CONF_DIR" bash -c '. "$1"; restic_repository_value' _ "$LIB_DIR/common.sh")" ]; then
         notice "Copie externe à configurer : sudo nano $CONF_DIR/restic.env puis sudo homebox-offsite init"
     fi
 
@@ -566,6 +597,19 @@ echo ""
 # ==========================================================
 # INSTALLATION
 # ==========================================================
+
+if $TOOLS_ONLY; then
+    run_step "Création des dossiers HOMEBOX" \
+        create_directories
+    run_step "Installation des outils HOMEBOX" \
+        install_tools
+    run_step "Installation des tâches planifiées" \
+        install_systemd
+    echo ""
+    echo -e "${GREEN}✔ Outils HOMEBOX à jour (conteneurs inchangés).${RESET}"
+    echo "Log : $PERSIST_LOG"
+    exit 0
+fi
 
 run_step "Création des dossiers HOMEBOX" \
     create_directories

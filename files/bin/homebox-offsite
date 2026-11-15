@@ -45,6 +45,7 @@ shift
 case "$cmd" in
 
     init)
+        offsite_configured || die "renseigne d'abord RESTIC_REPOSITORY dans $RESTIC_ENV (voir les exemples du fichier)."
         if [ ! -s "$PASS_FILE" ]; then
             openssl rand -base64 48 | tr -d '\n' > "$PASS_FILE"
             chmod 600 "$PASS_FILE"

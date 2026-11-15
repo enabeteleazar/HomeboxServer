@@ -22,7 +22,7 @@ DIR          ?=
 require = $(if $($(1)),,$(error $(1) manquant. Exemple : $(2)))
 
 .PHONY: help \
-        install-node install upgrade firewall firewall-check harden-ssh remove-system-db \
+        install-node install tools upgrade firewall firewall-check harden-ssh remove-system-db \
         status ps logs health timers tunnel \
         backup backups verify restore-test restore-postgres restore-redis \
         offsite-init offsite-status snapshots offsite-check \
@@ -46,6 +46,9 @@ install-node: ## Prépare une machine neuve (outils, Docker, Caddy, pare-feu)
 
 install: ## Installe ou met à jour l'infrastructure Docker (relançable)
 	sudo bash ./infra-docker.sh
+
+tools: ## Met à jour les outils, sudoers et tâches planifiées (sans toucher aux conteneurs)
+	sudo bash ./infra-docker.sh --tools-only
 
 upgrade: remove-system-db install ## Mise à niveau d'une machine existante (doublons + infra)
 	@echo ""

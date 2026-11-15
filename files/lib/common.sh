@@ -137,7 +137,14 @@ notify() {
         || echo "Notification ntfy impossible ($NTFY_URL)." >&2
 }
 
+# Vrai seulement si RESTIC_REPOSITORY a une valeur (RESTIC_REPOSITORY="" = non configuré)
+restic_repository_value() {
+    local file="${1:-$HOMEBOX_CONF_DIR/restic.env}"
+    [ -f "$file" ] || return 0
+    grep -m1 '^RESTIC_REPOSITORY=' "$file" | cut -d= -f2- \
+        | sed -E "s/^[[:space:]]*[\"']?//; s/[\"']?[[:space:]]*$//" || true
+}
+
 offsite_configured() {
-    [ -f "$HOMEBOX_CONF_DIR/restic.env" ] &&
-        grep -qE '^RESTIC_REPOSITORY=.+' "$HOMEBOX_CONF_DIR/restic.env"
+    [ -n "$(restic_repository_value)" ]
 }
