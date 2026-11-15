@@ -1,5 +1,5 @@
 # ==========================================================
-# HOMEBOX : raccourcis pour le kit homebox-docker
+# HOMEBOX : raccourcis pour le kit HomeboxServer
 # Usage : make            (liste des commandes)
 #         make <cible> [VARIABLE=valeur]
 # ==========================================================
@@ -22,7 +22,7 @@ DIR          ?=
 require = $(if $($(1)),,$(error $(1) manquant. Exemple : $(2)))
 
 .PHONY: help \
-        install-node install upgrade harden-ssh remove-system-db \
+        install-node install upgrade firewall firewall-check harden-ssh remove-system-db \
         status ps logs health timers tunnel \
         backup backups verify restore-test restore-postgres restore-redis \
         offsite-init offsite-status snapshots offsite-check \
@@ -54,6 +54,12 @@ upgrade: remove-system-db install ## Mise à niveau d'une machine existante (dou
 	@echo "  make notify-test    (après t'être abonné au sujet ntfy)"
 	@echo "  make offsite-init   (après avoir rempli /etc/homebox/restic.env)"
 	@echo "  make update"
+
+firewall: ## Active le pare-feu UFW (réseau local + Tailscale de confiance, Internet bloqué)
+	sudo bash ./firewall.sh
+
+firewall-check: ## Affiche les règles du pare-feu sans les appliquer
+	sudo bash ./firewall.sh --dry-run
 
 harden-ssh: ## SSH par clés uniquement (refuse si aucune clé autorisée)
 	sudo bash ./harden-ssh.sh

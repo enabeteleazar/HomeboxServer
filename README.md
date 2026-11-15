@@ -7,9 +7,10 @@ sauvegardes locales et externes, surveillance et alertes.
 ## Contenu
 
 ```
-homebox-docker/
+HomeboxServer/              (/srv/Projects/HomeboxServer)
 ├── install-node.sh        # 1. prépare la machine (outils, Docker, Caddy, pare-feu)
 ├── infra-docker.sh        # 2. bases de données, sauvegardes, surveillance (relançable)
+├── firewall.sh            # pare-feu UFW (réseau local + Tailscale, Internet bloqué)
 ├── harden-ssh.sh          # SSH par clés uniquement
 ├── remove-system-db.sh    # désactive PostgreSQL/Redis installés via apt (doublons)
 └── files/
@@ -138,6 +139,12 @@ sudo homebox-site remove monprojet.example.com
 
 Le domaine doit pointer (DNS) vers la machine. Renseigne l'`email` dans
 `/etc/caddy/Caddyfile` pour Let's Encrypt.
+
+**Pare-feu** : `sudo bash ./firewall.sh` (ou `make firewall`) refuse tout ce qui
+entre, sauf SSH (limité), 80/443 pour Caddy, le réseau local et Tailscale. Le
+dashboard (5199) et les serveurs de dev restent donc joignables chez toi et via
+Tailscale, pas depuis Internet. `make firewall-check` montre les règles sans
+les appliquer ; options `TRUST_LAN`, `TRUST_TAILSCALE`, `OPEN_WEB`, `SSH_TAILSCALE_ONLY`.
 
 **Docker et pare-feu** : Docker contourne UFW. Un port publié sans adresse
 (`-p 5432:5432`) serait ouvert sur Internet malgré le pare-feu.
