@@ -54,6 +54,23 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+
+def _asset_version() -> str:
+    """Empreinte des fichiers statiques : ajoutée aux liens (?v=…), elle oblige
+    le navigateur à recharger CSS et JS dès qu'ils changent, au lieu de garder
+    une ancienne copie en cache."""
+    import hashlib
+
+    digest = hashlib.sha1()
+    for path in sorted((BASE_DIR / "static").glob("*")):
+        if path.is_file():
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:10]
+
+
+templates.env.globals["asset_v"] = _asset_version()
+
 app.include_router(public_router)
 app.include_router(secured_router)
 
