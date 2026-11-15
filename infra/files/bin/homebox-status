@@ -238,7 +238,9 @@ def security() -> dict:
             pass
     return {
         "ssh_password_auth": sshd.get("passwordauthentication") == "yes",
-        "ssh_root_login": sshd.get("permitrootlogin", "") not in ("no", ""),
+        # « yes » = root par mot de passe ; « prohibit-password » (défaut Ubuntu) = clé seulement
+        "ssh_root_login": sshd.get("permitrootlogin", "") == "yes",
+        "ssh_root_mode": sshd.get("permitrootlogin", ""),
         "ssh_port": sshd.get("port", "22"),
         "ssh_keys": keys if user else None,
         "ufw_active": "Status: active" in ufw,

@@ -144,6 +144,7 @@ update: ## Sauvegarde puis applique les mises à jour d'images
 
 lint: ## Vérifie la syntaxe de tous les scripts du kit
 	@for f in *.sh files/bin/* files/lib/common.sh; do \
+		[ -f "$$f" ] || continue; \
 		if head -n1 "$$f" | grep -q python; then \
 			python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$$f"; \
 		else \
