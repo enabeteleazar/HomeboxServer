@@ -498,3 +498,13 @@ pre.logs { max-height: 22rem; overflow-y: auto; }
   .infos { grid-template-columns: 1fr; gap: 0.15rem 0; }
   .infos dd { margin-bottom: 0.5rem; }
 }
+
+/* --- page de connexion --------------------------------------------------- */
+.auth-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem 1rem; }
+.auth-shell { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 1.2rem; }
+.auth-brand { justify-content: center; }
+.auth-card .card-body { display: flex; flex-direction: column; gap: 1rem; padding: 1.5rem; }
+.auth-title { margin: 0; font-size: 1.25rem; }
+.auth-form { display: flex; flex-direction: column; gap: 1rem; }
+.auth-help { margin: 0; color: var(--text-2); font-size: 0.9rem; line-height: 1.5; }
+.auth-code { margin: 0; padding: 0.7rem 0.8rem; background: var(--surface-2, rgba(127,127,127,.08)); border: 1px solid var(--border); border-radius: var(--radius, 8px); overflow-x: auto; }

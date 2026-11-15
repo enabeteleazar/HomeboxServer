@@ -1,9 +1,9 @@
 """Authentification de l'API : un jeton Bearer, lu dans l'environnement
 ou dans /srv/.env (clé DASHBOARD_API_TOKEN).
 
-L'interface web reste sans authentification (accès déjà limité par
-Tailscale) ; l'API, elle, peut déclencher un deploy-prod : elle exige le
-jeton. Tant qu'aucun jeton n'est configuré, l'API répond 503 — jamais
+L'interface web a sa propre authentification (mot de passe + session,
+voir webauth.py) ; l'API, elle, peut déclencher un deploy-prod : elle exige
+le jeton. Tant qu'aucun jeton n'est configuré, l'API répond 503 — jamais
 « ouverte par défaut ».
 
 Génération du jeton : `make api-token` (ou `python3 -m srvctl.cli api-token`).

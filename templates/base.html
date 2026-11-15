@@ -32,6 +32,9 @@
       <p class="api-state {{ 'is-on' if api_configured else 'is-off' }}">
         <span class="dot"></span>API {{ "active" if api_configured else "sans jeton" }}
       </p>
+      <form method="post" action="/logout">
+        <button type="submit" class="btn btn-ghost btn-block">{{ ui.icon("back") }}Se déconnecter</button>
+      </form>
     </div>
    </div>
   </aside>

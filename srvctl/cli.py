@@ -461,9 +461,40 @@ def cmd_api_token(args: argparse.Namespace) -> None:
     print("\nRedémarre le dashboard si tu le lances avec une variable d'environnement figée.")
 
 
+def cmd_dashboard_password(args: argparse.Namespace) -> None:
+    """Définit (ou change) le mot de passe de l'interface web. Seule son
+    empreinte scrypt est écrite dans <SRV_ROOT>/.env ; changer le mot de
+    passe déconnecte toutes les sessions ouvertes."""
+    import getpass
+
+    import webauth  # à la racine du dépôt (PYTHONPATH posé par le Makefile)
+
+    if not sys.stdin.isatty():
+        print("ERREUR: lance cette commande dans un terminal (saisie masquée).", file=sys.stderr)
+        sys.exit(1)
+
+    already = webauth.password_hash() is not None
+    password = getpass.getpass("Nouveau mot de passe du dashboard : ")
+    if len(password) < webauth.MIN_PASSWORD_LENGTH:
+        print(f"ERREUR: au moins {webauth.MIN_PASSWORD_LENGTH} caractères.", file=sys.stderr)
+        sys.exit(1)
+    if getpass.getpass("Confirmation : ") != password:
+        print("ERREUR: les deux saisies diffèrent.", file=sys.stderr)
+        sys.exit(1)
+
+    webauth.set_password(password)
+    print(f"Mot de passe {'changé' if already else 'défini'} ({webauth.env_path()}).")
+    if already:
+        print("Toutes les sessions ouvertes sont déconnectées.")
+    print("Pas besoin de redémarrer le dashboard.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="srvctl", description="Gestion automatisée des projets sous /srv")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_pw = sub.add_parser("dashboard-password", help="Définit le mot de passe de l'interface web")
+    p_pw.set_defaults(func=cmd_dashboard_password)
 
     p_sync = sub.add_parser("sync", help="Scanne projects/personal, enregistre les nouveaux projets et retire ceux dont le dossier a disparu")
     p_sync.add_argument("--no-git", action="store_true", help="Ne pas faire git init / gh repo create")

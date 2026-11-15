@@ -268,7 +268,11 @@
     setInterval(function () {
       if (document.hidden) return;
       fetch(endpoint, { headers: { Accept: "application/json" } })
-        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (res) {
+          // session expirée : retour à la page de connexion
+          if (res.status === 401) { window.location.href = "/login?next=" + encodeURIComponent(window.location.pathname); return null; }
+          return res.ok ? res.json() : null;
+        })
         .then(function (state) {
           if (!state) return;
           if (seen === null) {

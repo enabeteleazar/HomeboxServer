@@ -31,6 +31,7 @@ ln -s Dashboard/Makefile Makefile
 pip install -r Dashboard/requirements.txt --break-system-packages
 make sync            # scanne projects/ personal/, met à jour srvctl/projects.json
 make api-token       # jeton de l'API pour Neron
+make dashboard-password   # mot de passe de l'interface web (obligatoire)
 make dashboard       # ou l'unité systemd, voir plus bas
 ```
 
@@ -93,6 +94,20 @@ Quatre pages :
 Détails d'usage : les actions longues (build, deploy) tournent en arrière-plan — la page reste utilisable et se rafraîchit toute seule à la fin. Un seul job à la fois par projet (une deuxième action sur le même projet est refusée). Thème clair/sombre suivant le système, avec bascule manuelle mémorisée dans le navigateur. Pas d'authentification sur l'interface web : l'accès est déjà limité par Tailscale.
 
 Ce qui n'apparaît pas dans le journal : les commandes lancées directement en SSH (`make deploy duoLingo`). Seul ce qui passe par le dashboard ou l'API est tracé.
+
+### Connexion à l'interface web
+
+L'interface est protégée par un mot de passe unique ; l'API `/api/v1` garde son jeton Bearer et n'est pas concernée.
+
+```bash
+make dashboard-password     # définit ou change le mot de passe (saisie masquée)
+```
+
+- Seule l'empreinte scrypt est stockée, dans `/srv/.env` (`DASHBOARD_PASSWORD_HASH`), avec le secret de session `DASHBOARD_SESSION_SECRET`.
+- Sans mot de passe défini, l'interface reste fermée (page d'instructions), jamais ouverte par défaut.
+- Session de 7 jours (cookie `HttpOnly`, `SameSite=Strict`) ; changer le mot de passe déconnecte toutes les sessions.
+- 5 échecs en 15 minutes bloquent l'adresse IP pendant le reste de la fenêtre ; chaque connexion (réussie ou non) est notée dans `journalctl -u srv-dashboard`.
+- Les formulaires envoyés depuis une autre origine sont refusés (protection CSRF).
 
 ### Le faire tourner en permanence (systemd)
 

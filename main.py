@@ -10,18 +10,19 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 # srvctl vit à côté de ce fichier : on s'assure que le dossier du
 # dépôt est sur sys.path quel que soit le cwd (uvicorn, make, cron…).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi import FastAPI, Form, Request  # noqa: E402
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse  # noqa: E402
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
 import services  # noqa: E402
+import webauth  # noqa: E402
 from api import API_VERSION, router as public_router, secured as secured_router  # noqa: E402
 from auth import ENV_KEY, is_configured  # noqa: E402
 from srvctl import journal  # noqa: E402
@@ -50,6 +51,73 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 app.include_router(public_router)
 app.include_router(secured_router)
+
+
+# --- authentification de l'interface web ----------------------------------
+#
+# Tout est protégé par la session, sauf : la page de connexion, les fichiers
+# statiques et l'API /api/v1 (qui a son propre jeton Bearer, voir auth.py).
+
+PUBLIC_PATHS = {"/login", "/favicon.ico"}
+PUBLIC_PREFIXES = ("/static/", "/api/v1/")
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin",
+}
+
+
+def _is_public(path: str) -> bool:
+    return path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES)
+
+
+def _same_origin(request: Request) -> bool:
+    """Protection CSRF en plus du cookie SameSite=Strict : un formulaire
+    envoyé depuis un autre site porte un Origin (ou Referer) étranger."""
+    source = request.headers.get("origin") or request.headers.get("referer")
+    if not source:
+        return True  # navigateurs anciens / outils en ligne de commande
+    return urlsplit(source).netloc == request.headers.get("host", "")
+
+
+def _safe_next(target: Optional[str]) -> str:
+    if target and target.startswith("/") and not target.startswith("//") and target != "/login":
+        return target
+    return "/"
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "inconnu"
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+
+    if not _is_public(path):
+        if not webauth.is_configured():
+            response = HTMLResponse(
+                templates.get_template("setup_password.html").render(api_version=API_VERSION),
+                status_code=503,
+            )
+        elif not webauth.session_valid(request.cookies.get(webauth.COOKIE_NAME)):
+            if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+                target = path + (f"?{request.url.query}" if request.url.query else "")
+                response = RedirectResponse(f"/login?next={quote(target)}", status_code=303)
+            else:
+                response = JSONResponse({"detail": "Connexion requise."}, status_code=401)
+        elif request.method in UNSAFE_METHODS and not _same_origin(request):
+            response = PlainTextResponse("Requête refusée (origine différente).", status_code=403)
+        else:
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
+
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
 
 
 # --- filtres d'affichage --------------------------------------------------
@@ -139,6 +207,58 @@ def render(request: Request, template: str, nav: str, **context):
 def back(url: str, message: str, kind: str = "ok") -> RedirectResponse:
     sep = "&" if "?" in url else "?"
     return RedirectResponse(f"{url}{sep}msg={quote(message)}&kind={kind}", status_code=303)
+
+
+# --- connexion ------------------------------------------------------------
+
+def _login_page(request: Request, next_url: str, error: Optional[str] = None, status_code: int = 200):
+    return templates.TemplateResponse(
+        request, "login.html",
+        {"next": next_url, "error": error, "configured": webauth.is_configured(), "api_version": API_VERSION},
+        status_code=status_code,
+    )
+
+
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+def login_page(request: Request, next: Optional[str] = None):
+    if webauth.is_configured() and webauth.session_valid(request.cookies.get(webauth.COOKIE_NAME)):
+        return RedirectResponse(_safe_next(next), status_code=303)
+    return _login_page(request, _safe_next(next))
+
+
+@app.post("/login", include_in_schema=False)
+def login_submit(request: Request, password: str = Form(""), next: str = Form("/")):
+    next_url = _safe_next(next)
+    if not webauth.is_configured():
+        return _login_page(request, next_url, status_code=503)
+    if not _same_origin(request):
+        return _login_page(request, next_url, "Requête refusée (origine différente).", 403)
+
+    ip = _client_ip(request)
+    wait = webauth.retry_after(ip)
+    if wait:
+        minutes = max(1, round(wait / 60))
+        return _login_page(request, next_url, f"Trop de tentatives : réessaie dans {minutes} min.", 429)
+
+    if not webauth.check_login(ip, password):
+        print(f"[dashboard] échec de connexion depuis {ip}")
+        return _login_page(request, next_url, "Mot de passe incorrect.", 401)
+
+    print(f"[dashboard] connexion réussie depuis {ip}")
+    response = RedirectResponse(next_url, status_code=303)
+    response.set_cookie(
+        webauth.COOKIE_NAME, webauth.new_session_token(),
+        max_age=webauth.SESSION_SECONDS, httponly=True, samesite="strict",
+        secure=request.url.scheme == "https", path="/",
+    )
+    return response
+
+
+@app.post("/logout", include_in_schema=False)
+def logout():
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(webauth.COOKIE_NAME, path="/")
+    return response
 
 
 # --- pages ----------------------------------------------------------------

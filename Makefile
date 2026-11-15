@@ -44,7 +44,7 @@ PROJECT_DIR = $(PROJECT_DIR_$(PROJECT))
 
 .DEFAULT_GOAL := help
 
-.PHONY: help list _project-dir sync dashboard api-token install-env-dev \
+.PHONY: help list _project-dir sync dashboard api-token dashboard-password install-env-dev \
 	dev dev-all dev-project \
 	start start-all start-project \
 	stop stop-all stop-project \
@@ -92,6 +92,7 @@ help:
 	@echo "  make sync                 (scanne /srv, ajoute les nouveaux projets, retire les disparus)"
 	@echo "  make dashboard            (lance le dashboard web sur DASHBOARD_PORT)"
 	@echo "  make api-token            (jeton Bearer de l'API pour Neron)"
+	@echo "  make dashboard-password   (mot de passe de l'interface web)"
 	@echo ""
 	@echo "Projects:"
 	@printf '  %s\n' $(PROJECTS)
@@ -145,6 +146,10 @@ dashboard:
 # dans /srv/.env. `make api-token ARGS=--rotate` en génère un nouveau.
 api-token:
 	@$(SRVCTL) api-token $(ARGS)
+
+# Mot de passe de l'interface web (empreinte scrypt dans $(ROOT)/.env).
+dashboard-password:
+	@$(SRVCTL) dashboard-password
 
 list:
 	@echo ""

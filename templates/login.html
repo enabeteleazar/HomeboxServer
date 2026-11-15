@@ -1,0 +1,21 @@
+{% extends "_auth_base.html" %}
+{% block title %}Connexion{% endblock %}
+{% block content %}
+<h1 class="auth-title">Connexion</h1>
+{% if error %}
+<div class="flash flash-error" role="alert">{{ ui.icon("alert") }}<span>{{ error }}</span></div>
+{% endif %}
+{% if configured %}
+<form method="post" action="/login" class="auth-form">
+  <input type="hidden" name="next" value="{{ next }}">
+  <div class="field">
+    <label for="password">Mot de passe</label>
+    <input id="password" type="password" name="password" required autofocus autocomplete="current-password">
+  </div>
+  <button class="btn btn-primary btn-block" type="submit">Se connecter</button>
+</form>
+{% else %}
+<p class="auth-help">Aucun mot de passe n'est défini. Sur homebox :</p>
+<pre class="mono auth-code">cd /srv && make dashboard-password</pre>
+{% endif %}
+{% endblock %}

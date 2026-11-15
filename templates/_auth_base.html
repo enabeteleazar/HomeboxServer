@@ -1,0 +1,25 @@
+{% import "_macros.html" as ui %}<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{% block title %}Connexion{% endblock %} · srv dashboard</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a78d6'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='16' font-weight='bold' fill='white' text-anchor='middle'%3E/%3E%3C/text%3E%3C/svg%3E">
+<script src="/static/theme.js"></script>
+</head>
+<body class="auth-page">
+<main class="auth-shell">
+  <div class="brand auth-brand">
+    <span class="brand-mark">/&gt;</span>
+    <span class="brand-text"><strong>srv</strong><small>homebox · v{{ api_version }}</small></span>
+  </div>
+  <section class="card auth-card">
+    <div class="card-body">
+      {% block content %}{% endblock %}
+    </div>
+  </section>
+</main>
+</body>
+</html>
