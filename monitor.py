@@ -272,6 +272,23 @@ def apt_updates() -> Optional[dict]:
         return _apt["value"]
 
 
+SMART_FILE = "/var/lib/homebox/smart.json"
+
+
+def smart() -> dict:
+    """Relevé SMART écrit toutes les heures par homebox-smart (kit HomeboxServer)."""
+    try:
+        with open(SMART_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {"available": False, "reason": "missing"}
+    except (OSError, json.JSONDecodeError):
+        return {"available": False, "reason": "unreadable"}
+    age = int(time.time()) - int(data.get("generated_ts") or 0)
+    data.update(available=True, age_seconds=age, stale=age > 3 * 3600)
+    return data
+
+
 def system() -> dict:
     vm, sw = psutil.virtual_memory(), psutil.swap_memory()
     per_core = psutil.cpu_percent(percpu=True)
@@ -309,6 +326,7 @@ def system() -> dict:
         "network": _network(),
         "processes": _top_processes(),
         "updates": apt_updates(),
+        "smart": smart(),
     }
 
 

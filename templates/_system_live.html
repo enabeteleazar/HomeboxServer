@@ -70,6 +70,56 @@
   </article>
 </section>
 
+{% set sm = data.smart %}
+<section class="card">
+  <header class="card-head"><div>
+    <h2>Santé du disque (SMART)</h2>
+    <p class="card-sub">{% if sm.available %}Relevé {{ sm.generated_at|ago }} · vérifié toutes les heures, auto-test court chaque semaine{% else %}Indicateurs internes du disque : secteurs défectueux, température, usure{% endif %}</p>
+  </div>
+  {% if sm.available %}{{ ui.level_pill(sm.status, {"ok": "en bonne santé", "warn": "à surveiller", "crit": "en danger"}.get(sm.status, "inconnu")) }}{% endif %}
+  </header>
+  <div class="card-body mstack">
+    {% if not sm.available %}
+    <p class="auth-help">Pas encore de relevé : le dashboard n'a pas accès à <span class="mono">smartctl</span> (droits root).
+      Installe le relevé automatique, sur homebox :</p>
+    <pre class="code mono">cd /srv/Projects/HomeboxServer && make tools</pre>
+    {% else %}
+    {% if sm.stale %}<p class="flash flash-error">{{ ui.icon("alert") }}<span>Relevé ancien ({{ sm.generated_at|ago }}) : vérifie <span class="mono">homebox-smart.timer</span>.</span></p>{% endif %}
+    {% for d in sm.disks %}
+    <div class="smart-disk">
+      <dl class="kv">
+        <dt>Disque</dt><dd><strong>{{ d.model }}</strong> · <span class="mono">{{ d.device }}</span> · {{ d.capacity|bytes }}{% if d.rotational %} · mécanique {{ d.rpm }} tr/min{% else %} · SSD{% endif %}</dd>
+        <dt>Verdict SMART</dt><dd>{{ "réussi" if d.passed else ("ÉCHEC — remplace le disque" if d.passed is false else "—") }}</dd>
+        <dt>Température</dt><dd>{{ d.temperature if d.temperature is not none else "—" }} °C</dd>
+        <dt>Fonctionnement</dt><dd>{% if d.power_on_hours %}{{ d.power_on_hours }} h (≈ {{ (d.power_on_hours / 8760)|round(1) }} ans){% else %}—{% endif %} · {{ d.power_cycles or "—" }} démarrages{% if d.load_cycles is not none %} · {{ d.load_cycles }} parcages des têtes{% endif %}</dd>
+        <dt>Dernier auto-test</dt><dd>
+          {% if d.test_running %}en cours…
+          {% elif d.last_test %}{{ "réussi" if d.last_test.passed else "ÉCHEC" }} ({{ d.last_test.type }}){% if d.last_test.age_hours is not none %}, il y a {{ d.last_test.age_hours }} h de fonctionnement{% endif %}
+          {% else %}jamais{% endif %}</dd>
+      </dl>
+      {% if d.findings %}
+      <ul class="smart-findings">
+        {% for f in d.findings %}<li>{{ ui.level_pill(f.level if f.level != "info" else "off", {"crit": "grave", "warn": "attention", "info": "info"}[f.level]) }} {{ f.text }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+      <details class="data-table" id="smart-{{ loop.index }}">
+        <summary>Compteurs surveillés</summary>
+        <table>
+          <thead><tr><th>Indicateur</th><th class="num">Valeur brute</th><th class="num">Normalisée / seuil</th></tr></thead>
+          <tbody>
+            {% for w in d.watched %}<tr><td>{{ w.label }}</td><td class="num">{{ w.raw }}</td><td class="num">{{ w.value }} / {{ w.thresh }}</td></tr>{% endfor %}
+            {% for i in d.info %}<tr><td>{{ i.label }}</td><td class="num">{{ i.raw }}</td><td class="num">—</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </details>
+    </div>
+    {% else %}
+    <p class="empty">Aucun disque compatible SMART détecté.</p>
+    {% endfor %}
+    {% endif %}
+  </div>
+</section>
+
 <section class="card">
   <header class="card-head"><div><h2>Disques</h2>
     <p class="card-sub">Remplissage des partitions et activité du disque</p></div></header>

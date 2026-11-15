@@ -105,8 +105,13 @@ Pages rafraîchies en direct (en pause quand l'onglet est caché) :
 | Docker | conteneurs par projet Compose (état, santé, CPU, mémoire, ports), espace disque Docker, volumes | 10 s |
 | Services | services systemd essentiels, tâches planifiées (dernier/prochain passage, résultat), unités en échec | 15 s |
 | Pare-feu | état UFW, exposition réelle de chaque port, règles, fail2ban | à la demande |
+| Historique | graphiques CPU, mémoire, température, charge, débit et occupation du disque, réseau (1 h à 90 jours, moyenne et pic) ; tendance de remplissage des partitions et date estimée où elles seraient pleines | 1 min |
 
-Tout est lu sans droits root (psutil, docker, systemctl), sauf le pare-feu qui passe par `homebox-firewall` (kit HomeboxServer, `make tools`). Les mêmes données sont exposées à Neron : `GET /api/v1/system`, `/docker`, `/services`, `/firewall`.
+**Historique** : un collecteur intégré au dashboard prend une mesure toutes les 15 s dans `<SRV_ROOT>/.data/metrics.db` (7 jours de mesures détaillées, 90 jours de résumés horaires, 1 an de remplissage des partitions). Un verrou garantit un seul collecteur même si le dashboard est lancé deux fois.
+
+**Santé du disque (SMART)** : relevée toutes les heures par `homebox-smart` (kit HomeboxServer, root) dans `/var/lib/homebox/smart.json`, affichée sur la page Système ; les dégradations (secteurs réalloués ou en attente en hausse, auto-test échoué, panne annoncée) déclenchent une alerte ntfy via `homebox-healthcheck`.
+
+Tout est lu sans droits root (psutil, docker, systemctl), sauf le pare-feu qui passe par `homebox-firewall` (kit HomeboxServer, `make tools`). Les mêmes données sont exposées à Neron : `GET /api/v1/system`, `/docker`, `/services`, `/firewall`, `/metrics?range=24h`.
 
 ### Connexion à l'interface web
 

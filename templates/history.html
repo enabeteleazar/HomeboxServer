@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Historique{% endblock %}
+{% block heading %}Historique{% endblock %}
+{% block subheading %}<p class="sub" data-collecting-since>Chargement des mesures…</p>{% endblock %}
+{% block page_actions %}{% endblock %}
+
+{% macro chart_card(id, title, sub, config, stats, columns) -%}
+<article class="card">
+  <header class="card-head"><div>
+    <h2>{{ title }}</h2>
+    <p class="card-sub">{{ sub }}</p>
+  </div>
+  {% if config.series|length > 1 %}
+  <div class="legend">
+    {% for s in config.series %}<span class="legend-item"><i class="line-key" style="background: {{ s.color }}"></i>{{ s.label }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  </header>
+  <div class="card-body">
+    <dl class="hist-figures">
+      {% for label, key in stats %}<div><dt>{{ label }}</dt><dd data-summary="{{ key }}">—</dd></div>{% endfor %}
+    </dl>
+    <div class="hist-chart" id="{{ id }}" data-metric-chart='{{ config|tojson }}'></div>
+    <details class="data-table" id="{{ id }}-table">
+      <summary>Voir les données</summary>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Heure</th>{% for s in config.series %}<th class="num">{{ s.label }}</th>{% if s.peak is not sameas false %}<th class="num" data-peak-col hidden>{{ s.label }} (pic)</th>{% endif %}{% endfor %}</tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </details>
+  </div>
+</article>
+{%- endmacro %}
+
+{% block content %}
+{% set blue = "var(--series-ok)" %}{% set orange = "var(--series-err)" %}
+<div class="live-stack" data-history data-range="{{ range }}">
+  <div class="chips hist-ranges" role="group" aria-label="Période affichée">
+    {% for key, label in ranges %}
+    <button type="button" class="chip {{ 'is-active' if key == range }}" data-range-button="{{ key }}" aria-pressed="{{ 'true' if key == range else 'false' }}">{{ label }}</button>
+    {% endfor %}
+  </div>
+  <p class="flash flash-error" data-history-error hidden>{{ ui.icon("alert") }}<span>Impossible de charger l'historique.</span></p>
+
+  <section class="grid-2 grid-even">
+    {{ chart_card("chart-cpu", "Processeur", "Utilisation moyenne de tous les cœurs",
+        {"title": "Processeur", "format": "pct", "max": 100, "series": [{"key": "cpu", "label": "Processeur", "color": blue}]},
+        [("Moyenne", "cpu:avg:pct"), ("Pic", "cpu:max:pct"), ("Maintenant", "cpu:last:pct")]) }}
+    {{ chart_card("chart-mem", "Mémoire", "Hors cache, que Linux libère à la demande",
+        {"title": "Mémoire", "format": "pct", "max": 100, "series": [{"key": "mem", "label": "RAM", "color": blue}, {"key": "swap", "label": "Swap", "color": orange, "peak": false}]},
+        [("RAM moyenne", "mem:avg:pct"), ("RAM pic", "mem:max:pct"), ("Swap maintenant", "swap:last:pct")]) }}
+    {{ chart_card("chart-temp", "Température du processeur", "Alerte à 70 °C, critique à 85 °C",
+        {"title": "Température", "format": "temp", "series": [{"key": "temp", "label": "Processeur", "color": blue}]},
+        [("Moyenne", "temp:avg:temp"), ("Pic", "temp:max:temp"), ("Maintenant", "temp:last:temp")]) }}
+    {{ chart_card("chart-load", "Charge moyenne", "Tâches en attente du processeur (1 min) — au-delà de 2, les 2 cœurs sont saturés",
+        {"title": "Charge", "format": "load", "series": [{"key": "load1", "label": "Charge", "color": blue, "peak": false}]},
+        [("Moyenne", "load1:avg:load"), ("Pic", "load1:max:load"), ("Maintenant", "load1:last:load")]) }}
+    {{ chart_card("chart-disk", "Disque : débit", "Lectures et écritures sur le disque",
+        {"title": "Débit disque", "format": "rate", "series": [{"key": "disk_read", "label": "Lecture", "color": blue}, {"key": "disk_write", "label": "Écriture", "color": orange}]},
+        [("Lecture moyenne", "disk_read:avg:rate"), ("Écriture moyenne", "disk_write:avg:rate"), ("Écriture pic", "disk_write:max:rate")]) }}
+    {{ chart_card("chart-busy", "Disque : occupation", "Part du temps où le disque travaille — un disque mécanique saturé ralentit tout",
+        {"title": "Occupation disque", "format": "pct", "max": 100, "series": [{"key": "disk_busy", "label": "Occupation", "color": blue}]},
+        [("Moyenne", "disk_busy:avg:pct"), ("Pic", "disk_busy:max:pct"), ("Maintenant", "disk_busy:last:pct")]) }}
+    {{ chart_card("chart-net", "Réseau", "Trafic des interfaces physiques (Wi-Fi, Ethernet)",
+        {"title": "Réseau", "format": "rate", "series": [{"key": "net_rx", "label": "Reçu", "color": blue}, {"key": "net_tx", "label": "Envoyé", "color": orange}]},
+        [("Reçu moyen", "net_rx:avg:rate"), ("Envoyé moyen", "net_tx:avg:rate"), ("Reçu pic", "net_rx:max:rate")]) }}
+  </section>
+
+  <section class="card">
+    <header class="card-head"><div>
+      <h2>Remplissage des disques</h2>
+      <p class="card-sub">Tendance sur 30 jours : estimation de la date où chaque partition serait pleine</p>
+    </div></header>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Partition</th><th>Remplissage</th><th class="num">Libre</th><th class="num">Croissance</th><th>Plein estimé</th></tr></thead>
+        <tbody>
+          {% for d in disks %}
+          {% set lvl = "crit" if d.percent >= 90 or (d.full_in_days is not none and d.full_in_days < 30) else ("warn" if d.percent >= 80 or (d.full_in_days is not none and d.full_in_days < 90) else "ok") %}
+          <tr>
+            <td data-label="Partition"><span class="mono">{{ d.mount }}</span></td>
+            <td data-label="Remplissage"><div class="mrow" style="grid-template-columns: minmax(0,1fr) auto;">{{ ui.meter(d.percent, lvl, d.mount) }}<span class="mrow-value">{{ d.percent|pct }}</span></div></td>
+            <td data-label="Libre" class="num">{{ d.free|bytes }}</td>
+            <td data-label="Croissance" class="num">{% if d.per_day is none %}<span class="cell-sub">{{ "mesure en cours" if d.history_days < 1 else "stable" }}</span>{% elif d.per_day > 0 %}+{{ d.per_day|bytes }}/jour{% else %}{{ d.per_day|bytes }}/jour{% endif %}</td>
+            <td data-label="Plein estimé">
+              {% if d.full_in_days is none %}<span class="cell-sub">{{ "pas assez d'historique (" ~ d.history_days ~ " j)" if d.history_days < 1 else "pas de croissance notable" }}</span>
+              {% else %}{{ ui.level_pill(lvl, "dans " ~ d.full_in_days ~ " jours" if d.full_in_days < 3650 else "dans plus de 10 ans") }}{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="/static/history.js"></script>{% endblock %}

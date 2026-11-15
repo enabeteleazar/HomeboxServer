@@ -195,3 +195,10 @@ def services_status() -> dict:
     import monitor
 
     return monitor.services()
+
+
+@secured.get("/metrics", summary="Historique : moyennes et pics (range = 1h, 6h, 24h, 7d, 30d, 90d) et tendance des disques")
+def metrics_history(range: str = Query("24h", description="1h | 6h | 24h | 7d | 30d | 90d")) -> dict:
+    import metrics
+
+    return metrics.series(range)

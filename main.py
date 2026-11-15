@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
 import firewall  # noqa: E402
+import metrics  # noqa: E402
 import monitor  # noqa: E402
 import services  # noqa: E402
 import webauth  # noqa: E402
@@ -36,6 +37,8 @@ BASE_DIR = Path(__file__).resolve().parent
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     journal.init_db()
+    if not metrics.start_collector():
+        print("[dashboard] un autre processus collecte déjà les mesures : historique non collecté ici.")
     stale = journal.recover_stale()
     if stale:
         print(f"[dashboard] {stale} action(s) interrompue(s) au redémarrage, marquée(s) en erreur.")
@@ -418,6 +421,22 @@ def services_page(request: Request):
 @app.get("/services/live", response_class=HTMLResponse, include_in_schema=False)
 def services_live(request: Request):
     return _live_fragment(request, "services")
+
+
+HISTORY_RANGES = [("1h", "1 h"), ("6h", "6 h"), ("24h", "24 h"), ("7d", "7 jours"), ("30d", "30 jours"), ("90d", "90 jours")]
+
+
+@app.get("/history", response_class=HTMLResponse, include_in_schema=False)
+def history_page(request: Request, range: str = "24h"):
+    if range not in metrics.RANGES:
+        range = "24h"
+    return render(request, "history.html", nav="history", range=range,
+                  ranges=HISTORY_RANGES, disks=metrics.disk_trends())
+
+
+@app.get("/history/data", include_in_schema=False)
+def history_data(range: str = "24h"):
+    return JSONResponse(metrics.series(range))
 
 
 @app.get("/firewall", response_class=HTMLResponse, include_in_schema=False)
