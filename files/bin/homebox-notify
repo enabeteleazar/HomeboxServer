@@ -1,0 +1,39 @@
+#!/bin/bash
+# ==========================================================
+# HOMEBOX NOTIFY : envoie une notification (ntfy + journal)
+#
+#   homebox-notify "Titre" "Message" [priorité 1-5]
+#   homebox-notify --unit <unité systemd>   (appelé par homebox-failure@.service)
+#   homebox-notify --test
+# ==========================================================
+
+set -Eeuo pipefail
+
+# shellcheck source=../lib/common.sh
+. "${HOMEBOX_LIB:-/usr/local/lib/homebox/common.sh}"
+
+require_root
+load_conf
+
+case "${1:-}" in
+    --unit)
+        unit="${2:-}"
+        [ -n "$unit" ] || die "unité manquante."
+        logs="$(journalctl -u "$unit" -n 15 --no-pager -o cat 2>/dev/null | tail -n 15 || true)"
+        notify "Échec : $unit" "${logs:-Pas de journal disponible.}
+
+Détails : sudo journalctl -u $unit" 5 "rotating_light"
+        ;;
+    --test)
+        [ -n "${NTFY_URL:-}" ] || die "NTFY_URL n'est pas défini dans $HOMEBOX_CONF_DIR/homebox.conf"
+        notify "Test" "Les notifications HOMEBOX fonctionnent." 3 "tada"
+        echo "Notification envoyée à $NTFY_URL"
+        ;;
+    ""|-h|--help)
+        sed -n '/^#   homebox-notify/s/^#   //p' "$0"
+        exit 1
+        ;;
+    *)
+        notify "$1" "${2:-}" "${3:-3}"
+        ;;
+esac

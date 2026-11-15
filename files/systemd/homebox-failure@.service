@@ -1,0 +1,6 @@
+[Unit]
+Description=Notification d'échec HOMEBOX pour %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homebox-notify --unit %i

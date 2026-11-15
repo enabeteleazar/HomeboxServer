@@ -1,3 +1,6 @@
+# Images figées sur une version majeure : « sudo homebox-update »
+# applique les correctifs sans changement de version majeure.
+
 name: homebox
 
 # Rotation des logs Docker (évite que les logs grossissent sans limite)
@@ -119,7 +122,7 @@ services:
 
   redis-commander:
 
-    image: ${REDIS_COMMANDER_IMAGE:-rediscommander/redis-commander:latest}
+    image: ${REDIS_COMMANDER_IMAGE:-ghcr.io/joeferner/redis-commander:0.9}
 
     container_name: homebox-redis-commander
 
@@ -140,6 +143,29 @@ services:
 
     logging: *default-logging
 
+  # ========================================
+  # UPTIME KUMA (surveillance et alertes)
+  # ========================================
+
+  uptime-kuma:
+
+    image: ${UPTIME_KUMA_IMAGE:-louislam/uptime-kuma:2}
+
+    container_name: homebox-uptime-kuma
+
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:${UPTIME_KUMA_PORT:-3001}:3001"
+
+    volumes:
+      - uptime_kuma_data:/app/data
+
+    networks:
+      - homebox-network
+
+    logging: *default-logging
+
 # ========================================
 # VOLUMES PERSISTANTS
 # ========================================
@@ -151,6 +177,9 @@ volumes:
 
   redis_data:
     name: homebox-redis-data
+
+  uptime_kuma_data:
+    name: homebox-uptime-kuma-data
 
 # ========================================
 # RESEAU

@@ -1,0 +1,24 @@
+# ==========================================================
+# HOMEBOX : configuration Caddy (installée par infra-docker.sh)
+# Ne mets pas tes sites ici : un fichier par site dans
+# /etc/caddy/sites/, créé avec « sudo homebox-site add ».
+# ==========================================================
+
+{
+	# Adresse utilisée par Let's Encrypt pour les certificats HTTPS
+	# (décommente et renseigne-la avant de publier un vrai domaine)
+	# email toi@example.com
+}
+
+# Réglages communs à tous les sites (import homebox_common)
+(homebox_common) {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}
+
+import /etc/caddy/sites/*.caddy

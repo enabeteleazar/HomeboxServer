@@ -1,4 +1,3 @@
-
 #!/bin/bash
 # ==========================================================
 # HOMEBOX DEV ENVIRONMENT v2
@@ -17,6 +16,13 @@ OPEN_WEB="${OPEN_WEB:-true}"
 SSH_TAILSCALE_ONLY="${SSH_TAILSCALE_ONLY:-false}"
 SSH_PORT="${SSH_PORT:-22}"
 ADD_USER_TO_DOCKER_GROUP="${ADD_USER_TO_DOCKER_GROUP:-true}"
+# PostgreSQL et Redis tournent dans Docker (infra-docker.sh) :
+# la version système n'est installée que sur demande.
+INSTALL_SYSTEM_DB="${INSTALL_SYSTEM_DB:-false}"
+# Durcissement SSH (clés uniquement) si une clé est déjà autorisée
+HARDEN_SSH="${HARDEN_SSH:-true}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ==========================================================
 # ENVIRONNEMENT
@@ -92,6 +98,13 @@ if [[ "$SSH_TAILSCALE_ONLY" != "true" && "$SSH_TAILSCALE_ONLY" != "false" ]]; th
     echo "Erreur : SSH_TAILSCALE_ONLY doit être true ou false."
     exit 1
 fi
+
+for option in INSTALL_SYSTEM_DB HARDEN_SSH; do
+    if [[ "${!option}" != "true" && "${!option}" != "false" ]]; then
+        echo "Erreur : $option doit être true ou false."
+        exit 1
+    fi
+done
 
 # ==========================================================
 # LOGS
@@ -206,6 +219,38 @@ setup_docker_repo() {
         > /etc/apt/sources.list.d/docker.list
 
     apt-get update
+}
+
+# Réglages par défaut du démon Docker (fusionnés avec l'existant) :
+# - ports publiés sur 127.0.0.1 par défaut : Docker contourne UFW,
+#   un « -p 5432:5432 » serait sinon ouvert sur Internet ;
+# - rotation des logs pour tous les conteneurs.
+configure_docker_daemon() {
+
+    local file=/etc/docker/daemon.json
+    install -d -m 0755 /etc/docker
+    [ -s "$file" ] || echo '{}' > "$file"
+
+    local before
+    before="$(sha256sum "$file")"
+
+    python3 - "$file" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    conf = json.load(f)
+conf.setdefault("ip", "127.0.0.1")
+if "log-driver" not in conf:
+    conf["log-driver"] = "json-file"
+    conf.setdefault("log-opts", {"max-size": "10m", "max-file": "3"})
+with open(path, "w") as f:
+    json.dump(conf, f, indent=2)
+    f.write("\n")
+PY
+
+    if [ "$(sha256sum "$file")" != "$before" ]; then
+        systemctl restart docker
+    fi
 }
 
 # ==========================================================
@@ -433,7 +478,12 @@ check_services() {
 
     local service
 
-    for service in docker postgresql redis-server caddy fail2ban; do
+    local services=(docker caddy fail2ban)
+    if [ "$INSTALL_SYSTEM_DB" = "true" ]; then
+        services+=(postgresql redis-server)
+    fi
+
+    for service in "${services[@]}"; do
 
         if ! systemctl is-active --quiet "$service"; then
             echo "Service inactif : $service"
@@ -506,6 +556,9 @@ run_step "Installation Docker et Compose" \
 run_step "Activation Docker" \
     systemctl enable --now docker
 
+run_step "Configuration du démon Docker" \
+    configure_docker_daemon
+
 if [ "$ADD_USER_TO_DOCKER_GROUP" = "true" ]; then
 
     run_step "Ajout de l'utilisateur au groupe Docker" \
@@ -544,24 +597,30 @@ run_step "Installation Vercel CLI" \
     pnpm_as_user add -g vercel
 
 # ==========================================================
-# 8. POSTGRESQL
+# 8-9. POSTGRESQL ET REDIS (système, optionnels)
 # ==========================================================
 
-run_step "Installation PostgreSQL" \
-    apt-get install -y postgresql postgresql-contrib
+if [ "$INSTALL_SYSTEM_DB" = "true" ]; then
 
-run_step "Activation PostgreSQL" \
-    systemctl enable --now postgresql
+    run_step "Installation PostgreSQL" \
+        apt-get install -y postgresql postgresql-contrib
 
-# ==========================================================
-# 9. REDIS
-# ==========================================================
+    run_step "Activation PostgreSQL" \
+        systemctl enable --now postgresql
 
-run_step "Installation Redis" \
-    apt-get install -y redis-server
+    run_step "Installation Redis" \
+        apt-get install -y redis-server
 
-run_step "Activation Redis" \
-    systemctl enable --now redis-server
+    run_step "Activation Redis" \
+        systemctl enable --now redis-server
+
+else
+
+    # Seuls les clients, pour se connecter aux conteneurs
+    run_step "Installation des clients PostgreSQL et Redis" \
+        apt-get install -y postgresql-client redis-tools
+
+fi
 
 # ==========================================================
 # 10. CADDY
@@ -592,6 +651,19 @@ run_step "Configuration Fail2ban SSH" \
 
 run_step "Configuration des mises à jour automatiques" \
     configure_unattended
+
+# Clés SSH uniquement. harden-ssh.sh refuse de s'appliquer (sans rien
+# modifier) tant qu'aucune clé n'est autorisée : on continue alors.
+SSH_HARDENED=false
+
+if [ "$HARDEN_SSH" = "true" ] && [ -f "$SCRIPT_DIR/harden-ssh.sh" ]; then
+    if bash "$SCRIPT_DIR/harden-ssh.sh" >> "$PERSIST_LOG" 2>&1; then
+        SSH_HARDENED=true
+        echo -e "${GREEN}✔${RESET} Durcissement SSH terminé."
+    else
+        echo -e "${YELLOW}!${RESET} Durcissement SSH reporté (aucune clé SSH autorisée, voir harden-ssh.sh)."
+    fi
+fi
 
 # ==========================================================
 # 12. PATH
@@ -627,7 +699,7 @@ echo "Vercel    : $(ver runuser -u "$TARGET_USER" -- env HOME="$USER_HOME" PATH=
 echo "Docker    : $(ver docker --version)"
 echo "Compose   : $(ver docker compose version --short)"
 echo "PostgreSQL: $(ver psql --version)"
-echo "Redis     : $(redis-server --version 2>/dev/null | awk '{print $3}' || true)"
+echo "Redis     : $(redis-cli --version 2>/dev/null | awk '{print $2}' || true)"
 echo "Caddy     : $(ver caddy version)"
 echo "=============================="
 echo ""
@@ -647,7 +719,13 @@ if [ "$ADD_USER_TO_DOCKER_GROUP" = "true" ]; then
     echo -e "${YELLOW}Attention : le groupe Docker donne des privilèges équivalents à root.${RESET}"
 fi
 
-echo -e "${YELLOW}Les ports Docker publiés doivent être protégés explicitement.${RESET}"
+echo -e "${YELLOW}Les ports Docker sont publiés sur 127.0.0.1 par défaut (/etc/docker/daemon.json).${RESET}"
+
+if [ "$SSH_HARDENED" = "true" ]; then
+    echo -e "${YELLOW}SSH : clés uniquement. Garde cette session ouverte et teste une nouvelle connexion.${RESET}"
+else
+    echo -e "${YELLOW}SSH accepte encore les mots de passe : ajoute ta clé (ssh-copy-id) puis sudo bash ./harden-ssh.sh${RESET}"
+fi
 echo ""
 echo "Reconnecte-toi pour appliquer les groupes et le PATH."
 echo ""

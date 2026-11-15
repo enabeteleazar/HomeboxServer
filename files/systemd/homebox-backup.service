@@ -1,0 +1,12 @@
+[Unit]
+Description=Sauvegarde HOMEBOX (PostgreSQL + Redis + copie externe)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=homebox-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homebox-backup
+Nice=10
+IOSchedulingClass=idle

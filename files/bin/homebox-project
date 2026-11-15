@@ -1,0 +1,126 @@
+#!/bin/bash
+# ==========================================================
+# HOMEBOX PROJECT : une base PostgreSQL et un utilisateur
+# dédiés par projet (au lieu du compte administrateur).
+# Utilisable sans sudo par un membre du groupe docker.
+#
+#   homebox-project create <nom>     crée la base et l'utilisateur, affiche DATABASE_URL
+#   homebox-project list             liste les bases des projets
+#   homebox-project password <nom>   génère un nouveau mot de passe
+#   homebox-project drop <nom>       supprime la base et l'utilisateur (demande confirmation)
+#
+# <nom> : minuscules, chiffres et _ (2 à 31 caractères, commence par une lettre)
+# ==========================================================
+
+set -Eeuo pipefail
+
+# shellcheck source=../lib/common.sh
+. "${HOMEBOX_LIB:-/usr/local/lib/homebox/common.sh}"
+
+usage() {
+    sed -n '/^#   homebox-project/s/^#   //p' "$0"
+    exit 1
+}
+
+cmd="${1:-}"
+name="${2:-}"
+[ -n "$cmd" ] || usage
+
+container_running "$PG_CONTAINER" || die "conteneur non démarré : $PG_CONTAINER (ou accès Docker refusé)"
+
+PG_ADMIN="$(get_env POSTGRES_USER)"
+PG_ADMIN_DB="$(get_env POSTGRES_DB)"
+PG_PORT="$(get_env POSTGRES_PORT)"
+[ -n "$PG_ADMIN" ] || die "POSTGRES_USER manquant dans $ENV_FILE"
+
+psql_admin() {
+    docker exec -i "$PG_CONTAINER" psql -U "$PG_ADMIN" -d postgres -v ON_ERROR_STOP=1 -AtX "$@"
+}
+
+check_name() {
+    [ -n "$name" ] || usage
+    [[ "$name" =~ ^[a-z][a-z0-9_]{1,30}$ ]] || die "nom invalide : $name (minuscules, chiffres, _ ; commence par une lettre)"
+    case "$name" in
+        postgres|template0|template1|"$PG_ADMIN"|"$PG_ADMIN_DB")
+            die "nom réservé : $name" ;;
+    esac
+}
+
+role_exists() { [ "$(psql_admin -c "SELECT 1 FROM pg_roles WHERE rolname = '$name'")" = "1" ]; }
+db_exists()   { [ "$(psql_admin -c "SELECT 1 FROM pg_database WHERE datname = '$name'")" = "1" ]; }
+
+print_urls() {
+    local password="$1"
+    echo ""
+    echo "Depuis la machine (tes projets, Vite, scripts) :"
+    echo "  DATABASE_URL=postgresql://$name:$password@127.0.0.1:${PG_PORT:-5433}/$name"
+    echo ""
+    echo "Depuis un conteneur du réseau homebox-network :"
+    echo "  DATABASE_URL=postgresql://$name:$password@postgres:5432/$name"
+    echo ""
+    echo "Redis est partagé : préfixe tes clés par « $name: » pour ne pas mélanger les projets."
+    echo "Ce mot de passe n'est affiché qu'une fois : copie-le dans le .env.local du projet."
+}
+
+case "$cmd" in
+
+    create)
+        check_name
+        role_exists && die "l'utilisateur « $name » existe déjà (homebox-project password $name pour changer son mot de passe)."
+        db_exists && die "la base « $name » existe déjà."
+
+        password="$(openssl rand -hex 24)"
+
+        psql_admin <<SQL >/dev/null
+CREATE ROLE "$name" LOGIN PASSWORD '$password';
+CREATE DATABASE "$name" OWNER "$name";
+REVOKE ALL ON DATABASE "$name" FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE "$name" TO "$name";
+REVOKE CONNECT ON DATABASE "$PG_ADMIN_DB" FROM PUBLIC;
+SQL
+        echo "Base et utilisateur « $name » créés."
+        print_urls "$password"
+        ;;
+
+    list)
+        psql_admin -F $'\t' -c "
+            SELECT d.datname,
+                   pg_get_userbyid(d.datdba),
+                   pg_size_pretty(pg_database_size(d.datname))
+            FROM pg_database d
+            WHERE NOT d.datistemplate
+              AND d.datname NOT IN ('postgres', '$PG_ADMIN_DB')
+            ORDER BY 1" \
+        | { printf 'BASE\tPROPRIÉTAIRE\tTAILLE\n'; cat; } | column -t -s $'\t'
+        ;;
+
+    password)
+        check_name
+        role_exists || die "utilisateur inconnu : $name"
+        password="$(openssl rand -hex 24)"
+        psql_admin -c "ALTER ROLE \"$name\" PASSWORD '$password'" >/dev/null
+        echo "Nouveau mot de passe pour « $name »."
+        print_urls "$password"
+        ;;
+
+    drop)
+        check_name
+        db_exists || role_exists || die "rien à supprimer pour « $name »."
+
+        if [ "${3:-}" != "--yes" ]; then
+            [ -t 0 ] || die "confirmation impossible hors terminal (ajoute --yes)."
+            echo "La base « $name » et toutes ses données seront SUPPRIMÉES."
+            echo "(Les sauvegardes existantes la contiennent encore pendant leur durée de conservation.)"
+            read -r -p "Tape le nom du projet pour confirmer : " answer
+            [ "$answer" = "$name" ] || die "annulé."
+        fi
+
+        psql_admin -c "DROP DATABASE IF EXISTS \"$name\" WITH (FORCE)" >/dev/null
+        psql_admin -c "DROP ROLE IF EXISTS \"$name\"" >/dev/null
+        echo "Projet « $name » supprimé."
+        ;;
+
+    *)
+        usage
+        ;;
+esac
