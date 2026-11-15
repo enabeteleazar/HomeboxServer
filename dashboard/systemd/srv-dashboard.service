@@ -39,9 +39,9 @@ KillMode=process
 # (eleazar est déjà dans le groupe docker, équivalent root : NoNewPrivileges
 # n'apportait presque rien.)
 # ProtectSystem=full rend /etc en lecture seule pour le service ET ses enfants,
-# sudo compris : UFW doit pouvoir écrire ses règles et sa configuration.
+# sudo compris : UFW et Caddy doivent pouvoir écrire leur configuration.
 ProtectSystem=full
-ReadWritePaths=/srv /etc/ufw /etc/default/ufw
+ReadWritePaths=/srv /etc/ufw /etc/default/ufw /etc/caddy
 
 # Journal : `journalctl -u srv-dashboard -f`
 StandardOutput=journal

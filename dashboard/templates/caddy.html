@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Caddy{% endblock %}
+{% block heading %}Caddy{% endblock %}
+{% block subheading %}
+<p class="sub">Serveur web : publie tes projets en HTTPS, certificats Let's Encrypt automatiques</p>
+{% endblock %}
+
+{% block page_actions %}
+{% if cd.available %}
+<form method="post" action="/caddy/reload" data-confirm="Recharger la configuration de Caddy ?">
+  <button class="btn" type="submit">{{ ui.icon("refresh") }}Recharger</button>
+</form>
+<button type="button" class="btn btn-primary" data-open-dialog="caddySiteDialog">{{ ui.icon("plus") }}Publier un site</button>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if not cd.available %}
+<section class="card">
+  <header class="card-head"><div><h2>Caddy inaccessible</h2><p class="card-sub">{{ cd.error }}</p></div></header>
+  <div class="card-body fw-setup">
+    {% if cd.missing %}
+    <p class="auth-help">La configuration de Caddy est réservée à root : le dashboard passe par le script
+      <span class="mono">homebox-caddy</span>, qui valide tout. Pour l'installer, sur homebox :</p>
+    <pre class="code mono">{{ cd.setup_hint }}
+cd /srv/HomeboxServer && make dashboard-unit</pre>
+    {% endif %}
+  </div>
+</section>
+{% else %}
+{% set st = cd.status %}
+
+<section class="stats">
+  <article class="stat {{ 'stat-alert' if st.active != 'active' }}">
+    <p class="stat-label">Service</p>
+    <p class="stat-value">{{ "actif" if st.active == "active" else st.active }}</p>
+    <p class="stat-note">Caddy {{ st.version }} · {{ "démarrage auto" if st.enabled == "enabled" else "pas de démarrage auto" }}</p>
+  </article>
+  <article class="stat {{ 'stat-alert' if not st.valid }}">
+    <p class="stat-label">Configuration</p>
+    <p class="stat-value">{{ "valide" if st.valid else "invalide" }}</p>
+    <p class="stat-note">{% if st.valid %}vérifiée par caddy validate{% else %}{{ st.validation_message|truncate(80) }}{% endif %}</p>
+  </article>
+  <article class="stat">
+    <p class="stat-label">Sites publiés</p>
+    <p class="stat-value">{{ cd.sites|length }}</p>
+    <p class="stat-note">{{ cd.sites|selectattr("certificate.ok")|list|length }} avec un certificat valide</p>
+  </article>
+  <article class="stat {{ 'stat-alert' if not st.email and cd.sites }}">
+    <p class="stat-label">E-mail Let's Encrypt</p>
+    <p class="stat-value">{{ "défini" if st.email else "aucun" }}</p>
+    <p class="stat-note">{{ st.email or "conseillé pour être prévenu des problèmes de certificat" }}</p>
+  </article>
+</section>
+
+{% if not st.homebox_layout %}
+<div class="flash flash-error" role="alert">{{ ui.icon("alert") }}<span>Le Caddyfile n'utilise pas la configuration HOMEBOX
+  (un fichier par site dans /etc/caddy/sites) : la gestion des sites est désactivée. <span class="mono">cd /srv/HomeboxServer && make install</span></span></div>
+{% endif %}
+
+<section class="card">
+  <header class="card-head"><div>
+    <h2>Sites publiés</h2>
+    <p class="card-sub">Chaque domaine doit pointer (DNS A/AAAA) vers ta connexion, ports 80 et 443 redirigés vers homebox</p>
+  </div></header>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Domaine</th><th>Cible</th><th>Service</th><th>Certificat HTTPS</th><th></th></tr></thead>
+      <tbody>
+        {% for s in cd.sites %}
+        <tr>
+          <td data-label="Domaine"><a class="link" href="https://{{ s.domain }}" target="_blank" rel="noopener">{{ s.domain }} {{ ui.icon("external") }}</a>
+            {% if not s.managed %}<span class="cell-sub">fichier modifié à la main</span>{% endif %}</td>
+          <td data-label="Cible">
+            {% if s.mode == "proxy" %}{% if s.project %}<strong>{{ s.project }}</strong> {% endif %}<span class="mono cell-sub">{{ s.target }}</span>
+            {% elif s.mode == "static" %}<span class="tag">fichiers statiques</span><span class="mono cell-sub">{{ s.target }}</span>
+            {% else %}<span class="cell-sub">configuration personnalisée</span>{% endif %}
+          </td>
+          <td data-label="Service">
+            {% if s.upstream_up is none %}{{ ui.level_pill("off", "—") }}
+            {% elif s.upstream_up %}{{ ui.level_pill("ok", "en ligne") }}
+            {% else %}{{ ui.level_pill("crit", "arrêté") }}<span class="cell-sub">rien n'écoute sur ce port : le site renvoie une erreur 502</span>{% endif %}
+          </td>
+          <td data-label="Certificat">
+            {% set c = s.certificate %}
+            {% if c.ok %}{{ ui.level_pill(c.level, c.days_left ~ " j") }}<span class="cell-sub">expire le {{ c.expires|dt }} · {{ c.issuer }}</span>
+            {% else %}{{ ui.level_pill("crit", "aucun") }}<span class="cell-sub">{{ c.error }}</span>{% endif %}
+          </td>
+          <td data-label="">
+            <form method="post" action="/caddy/site/delete" data-confirm="Retirer le site {{ s.domain }} ? Il ne sera plus accessible.">
+              <input type="hidden" name="domain" value="{{ s.domain }}">
+              <button class="btn btn-danger btn-sm" type="submit">{{ ui.icon("trash") }}Retirer</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5"><p class="empty">Aucun site publié. Utilise « Publier un site » pour mettre un projet en ligne en HTTPS.</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="grid-2">
+  <article class="card">
+    <header class="card-head"><div>
+      <h2>Journal</h2>
+      <p class="card-sub">{{ cd.logs|length }} dernières lignes{% if cd.log_errors %} · {{ cd.log_errors }} avertissement(s) ou erreur(s){% endif %}</p>
+    </div></header>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Heure</th><th>Niveau</th><th>Message</th></tr></thead>
+        <tbody>
+          {% for e in cd.logs[:40] %}
+          <tr>
+            <td data-label="Heure"><span class="mono">{{ e.time|time }}</span><span class="cell-sub">{{ e.time|ago }}</span></td>
+            <td data-label="Niveau">{{ ui.level_pill({"error": "crit", "fatal": "crit", "warn": "warn"}.get(e.level, "off"), e.level) }}</td>
+            <td data-label="Message">{{ e.message }}{% if e.logger %}<span class="cell-sub mono">{{ e.logger }}{% if e.details %} · {{ e.details }}{% endif %}</span>{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="3"><p class="empty">Journal vide.</p></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="card">
+    <header class="card-head"><div><h2>Réglages</h2></div></header>
+    <form method="post" action="/caddy/email" class="card-body fw-form">
+      <div class="field">
+        <label for="cd-email">E-mail pour Let's Encrypt</label>
+        <input id="cd-email" type="email" name="email" value="{{ st.email }}" placeholder="toi@exemple.fr" autocomplete="email">
+        <p class="hint">Let's Encrypt t'écrit si un certificat ne peut pas être renouvelé. Laisse vide pour le retirer.</p>
+      </div>
+      <div><button class="btn" type="submit">Enregistrer</button></div>
+    </form>
+    <div class="card-body">
+      <p class="hint">Ports jamais publiables (à joindre via Tailscale) :
+        {% for p, name in st.forbidden_ports.items() %}<span class="mono">{{ p }}</span> {{ name }}{{ ", " if not loop.last }}{% endfor %}.</p>
+    </div>
+  </article>
+</section>
+
+<dialog id="caddySiteDialog" class="modal">
+  <form method="post" action="/caddy/site">
+    <div class="modal-head">
+      <h2>Publier un site</h2>
+      <button type="button" class="icon-btn" data-close-dialog aria-label="Fermer">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="cs-domain">Domaine</label>
+        <input id="cs-domain" name="domain" required placeholder="app.exemple.fr" autocomplete="off"
+               pattern="([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}">
+        <p class="hint">Il doit déjà pointer vers ta connexion : Caddy obtient le certificat au premier accès.</p>
+      </div>
+      <div class="field">
+        <label for="cs-mode">Contenu</label>
+        <select id="cs-mode" name="mode" data-caddy-mode>
+          <option value="project">Un projet du registre</option>
+          <option value="port">Un port local (application)</option>
+          <option value="static">Un dossier de fichiers statiques</option>
+        </select>
+      </div>
+      <div class="field" data-caddy-field="project">
+        <label for="cs-project">Projet</label>
+        <select id="cs-project" name="project_port">
+          {% for p in cd.projects %}<option value="{{ p.port }}">{{ p.name }} — port {{ p.port }}</option>{% endfor %}
+        </select>
+        <p class="hint">Le projet doit être démarré (make start ou depuis sa fiche) pour que le site réponde.</p>
+      </div>
+      <div class="field" data-caddy-field="port" hidden>
+        <label for="cs-port">Port</label>
+        <input id="cs-port" name="port" inputmode="numeric" pattern="\d{2,5}" placeholder="5190" autocomplete="off">
+      </div>
+      <div class="field" data-caddy-field="static" hidden>
+        <label for="cs-static">Dossier</label>
+        <input id="cs-static" name="static" placeholder="/srv/Projects/MonSite/dist" autocomplete="off">
+        <p class="hint">Sous /srv, sans .env ni .git : publie le dossier de build (dist/, build/, public/).</p>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-dialog>Annuler</button>
+      <button type="submit" class="btn btn-primary">Publier</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var mode = document.querySelector("[data-caddy-mode]");
+  if (!mode) return;
+  function sync() {
+    document.querySelectorAll("[data-caddy-field]").forEach(function (field) {
+      var on = field.getAttribute("data-caddy-field") === mode.value;
+      field.hidden = !on;
+      field.querySelectorAll("input, select").forEach(function (input) {
+        input.disabled = !on;
+        if (input.tagName === "INPUT") input.required = on;
+      });
+    });
+  }
+  mode.addEventListener("change", sync);
+  sync();
+})();
+</script>
+{% endblock %}

@@ -209,3 +209,12 @@ def server_overview() -> dict:
     import monitor
 
     return monitor.overview(services.list_projects())
+
+
+@secured.get("/caddy", summary="Caddy : état du service, sites publiés (cible, certificat HTTPS), journal récent")
+def caddy_status() -> dict:
+    import caddy
+
+    data = caddy.overview()
+    data.pop("projects", None)
+    return data

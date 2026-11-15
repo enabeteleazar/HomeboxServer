@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
+import caddy  # noqa: E402
 import firewall  # noqa: E402
 import metrics  # noqa: E402
 import monitor  # noqa: E402
@@ -515,6 +516,65 @@ def history_page(request: Request, range: str = "24h"):
 @app.get("/history/data", include_in_schema=False)
 def history_data(range: str = "24h"):
     return JSONResponse(metrics.series(range))
+
+
+# --- Caddy ------------------------------------------------------------------
+
+@app.get("/caddy", response_class=HTMLResponse, include_in_schema=False)
+def caddy_page(request: Request):
+    return render(request, "caddy.html", nav="caddy", cd=caddy.overview())
+
+
+def _caddy_result(result: dict) -> RedirectResponse:
+    return back("/caddy", result.get("message") or "Opération refusée", "ok" if result.get("ok") else "error")
+
+
+@app.post("/caddy/site", include_in_schema=False)
+def caddy_add(
+    domain: str = Form(...),
+    mode: str = Form("project"),
+    project_port: str = Form(""),
+    port: str = Form(""),
+    static: str = Form(""),
+):
+    if mode == "project":
+        port, static = project_port, ""
+    elif mode == "port":
+        static = ""
+    elif mode == "static":
+        port = ""
+    else:
+        return back("/caddy", "Type de site inconnu", "error")
+    if not (port or static):
+        return back("/caddy", "Choisis un projet, un port ou un dossier", "error")
+    try:
+        return _caddy_result(caddy.add_site(domain.strip().lower(), port=port.strip(), static=static.strip()))
+    except caddy.CaddyError as exc:
+        return back("/caddy", exc.message, "error")
+
+
+@app.post("/caddy/site/delete", include_in_schema=False)
+def caddy_delete(domain: str = Form(...)):
+    try:
+        return _caddy_result(caddy.remove_site(domain))
+    except caddy.CaddyError as exc:
+        return back("/caddy", exc.message, "error")
+
+
+@app.post("/caddy/reload", include_in_schema=False)
+def caddy_reload():
+    try:
+        return _caddy_result(caddy.reload())
+    except caddy.CaddyError as exc:
+        return back("/caddy", exc.message, "error")
+
+
+@app.post("/caddy/email", include_in_schema=False)
+def caddy_email(email: str = Form("")):
+    try:
+        return _caddy_result(caddy.set_email(email.strip()))
+    except caddy.CaddyError as exc:
+        return back("/caddy", exc.message, "error")
 
 
 @app.get("/firewall", response_class=HTMLResponse, include_in_schema=False)

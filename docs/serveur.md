@@ -212,7 +212,8 @@ test : `make notify-test`), à l'apparition d'un problème puis en rappel toutes
   dashboard) enregistre les nouveaux dossiers, attribue un port (5180-5299) et retire ceux
   qui ont disparu.
 - `cd /srv && make list`, `make dev <projet>`, `make deploy <projet>` (Vercel).
-- Publier un projet en HTTPS sur un domaine qui pointe vers la machine :
+- Publier un projet en HTTPS : page **Caddy** du dashboard (« Publier un site » : un projet,
+  un port ou un dossier statique), ou en ligne de commande, sur un domaine qui pointe vers la machine :
 
 ```bash
 make site-add DOMAIN=app.exemple.fr PORT=5190

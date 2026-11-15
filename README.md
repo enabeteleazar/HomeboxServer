@@ -21,6 +21,7 @@ Le dashboard tourne sous un utilisateur normal ; ce qui demande root vit dans `i
 | Dans le dashboard | Fourni par infra/ |
 |---|---|
 | Page Pare-feu | `homebox-firewall` (valide tout) + `/etc/sudoers.d/homebox-firewall` |
+| Page Caddy | `homebox-caddy` (valide tout, remet l'ancienne configuration si Caddy la refuse), même règle sudo |
 | Boutons « Sauvegarder maintenant », « Actualiser l'état » | deux commandes `systemctl` autorisées par la même règle sudo |
 | Vue d'ensemble, Sauvegardes (alertes, sécurité, certificats) | `/var/lib/homebox/status.json`, écrit sans secret par `homebox-status` |
 | Carte « Santé du disque » | `/var/lib/homebox/smart.json`, écrit par `homebox-smart` |

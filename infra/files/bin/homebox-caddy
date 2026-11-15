@@ -1,0 +1,293 @@
+#!/usr/bin/python3 -I
+"""HOMEBOX CADDY : gestion de Caddy pour le dashboard (via sudo).
+
+La règle sudoers autorise ce script sans contrôler ses arguments : TOUT est
+validé ici. Chaque modification est vérifiée par « caddy validate » ; si Caddy
+refuse la nouvelle configuration, l'ancienne est remise en place.
+
+  homebox-caddy status
+  homebox-caddy add --domain app.exemple.fr (--port 5190 | --static /srv/Projects/X/dist)
+  homebox-caddy remove --domain app.exemple.fr
+  homebox-caddy reload
+  homebox-caddy set-email --email toi@exemple.fr   (vide = retirer)
+
+Sortie : toujours un objet JSON ; code 0 si ok, 1 sinon.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C", "HOME": "/root"}
+CADDYFILE = "/etc/caddy/Caddyfile"
+SITES_DIR = "/etc/caddy/sites"
+
+DOMAIN_RE = re.compile(r"^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@([A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}$")
+
+# Ports d'administration jamais publiés sur Internet : à joindre via Tailscale
+FORBIDDEN_PORTS = {
+    22: "SSH", 2019: "administration de Caddy", 5199: "dashboard (utilise Tailscale)",
+    5432: "PostgreSQL", 5433: "PostgreSQL", 6379: "Redis", 6380: "Redis",
+    8080: "Adminer", 8081: "Redis Commander", 3001: "Uptime Kuma",
+}
+STATIC_ROOT = "/srv/"
+
+
+class Refused(Exception):
+    pass
+
+
+def run(cmd: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=ENV)
+
+
+def reply(ok: bool, message: str, **extra) -> None:
+    print(json.dumps({"ok": ok, "message": message, **extra}, ensure_ascii=False))
+    sys.exit(0 if ok else 1)
+
+
+def validate() -> tuple[bool, str]:
+    out = run(["caddy", "validate", "--config", CADDYFILE, "--adapter", "caddyfile"])
+    # Caddy journalise en JSON : on garde la phrase utile (« msg ») de la dernière erreur
+    messages = []
+    for line in (out.stdout + out.stderr).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+            if entry.get("level") in ("error", "fatal") or out.returncode != 0:
+                messages.append(entry.get("msg") or entry.get("error") or line)
+        except json.JSONDecodeError:
+            messages.append(line)
+    return out.returncode == 0, (messages[-1] if messages else "")[:400]
+
+
+def reload_caddy() -> tuple[bool, str]:
+    out = run(["systemctl", "reload", "caddy"])
+    return out.returncode == 0, (out.stdout + out.stderr).strip()[:400]
+
+
+def apply_or_rollback(backups: dict[str, str | None], success: str, **extra) -> None:
+    """Valide et recharge ; sinon remet chaque fichier modifié dans son état d'origine."""
+    ok, message = validate()
+    if ok:
+        ok, message = reload_caddy()
+        if ok:
+            reply(True, success, **extra)
+    for path, content in backups.items():
+        if content is None:
+            if os.path.exists(path):
+                os.remove(path)
+        else:
+            write(path, content)
+    validate()
+    reply(False, f"Caddy a refusé la nouvelle configuration, ancienne version remise en place : {message}")
+
+
+def write(path: str, content: str) -> None:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def read(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+# --- lecture -----------------------------------------------------------------
+
+def parse_site(path: str) -> dict:
+    content = read(path) or ""
+    domain = os.path.basename(path)[:-6]
+    site = {"domain": domain, "mode": "autre", "target": "", "file": path,
+            "modified": datetime.fromtimestamp(os.path.getmtime(path), timezone.utc).isoformat(),
+            "managed": "import homebox_common" in content}
+    m = re.search(r"reverse_proxy\s+(\S+)", content)
+    if m:
+        site["mode"] = "proxy"
+        site["target"] = m.group(1)
+        port = re.search(r":(\d+)$", m.group(1))
+        site["port"] = int(port.group(1)) if port else None
+    else:
+        m = re.search(r"root\s+\*\s+(\S+)", content)
+        if m:
+            site["mode"] = "static"
+            site["target"] = m.group(1)
+    return site
+
+
+def current_email() -> str:
+    content = read(CADDYFILE) or ""
+    m = re.search(r"^\s*email\s+(\S+)\s*$", content, re.M)
+    return m.group(1) if m else ""
+
+
+def status() -> dict:
+    show = run(["systemctl", "show", "caddy", "-p", "ActiveState,SubState,ActiveEnterTimestamp,UnitFileState"]).stdout
+    info = dict(line.split("=", 1) for line in show.splitlines() if "=" in line)
+    version = run(["caddy", "version"]).stdout.split(" ")[0].strip()
+    valid, message = validate()
+    caddyfile = read(CADDYFILE) or ""
+    sites = [parse_site(os.path.join(SITES_DIR, f)) for f in sorted(os.listdir(SITES_DIR))
+             if f.endswith(".caddy")] if os.path.isdir(SITES_DIR) else []
+    return {
+        "active": info.get("ActiveState", ""), "sub": info.get("SubState", ""),
+        "since": info.get("ActiveEnterTimestamp", "") or None, "enabled": info.get("UnitFileState", ""),
+        "version": version, "valid": valid, "validation_message": "" if valid else message,
+        "homebox_layout": f"import {SITES_DIR}/" in caddyfile,
+        "email": current_email(), "sites": sites,
+        "forbidden_ports": {str(k): v for k, v in FORBIDDEN_PORTS.items()},
+    }
+
+
+# --- écriture ----------------------------------------------------------------
+
+def check_layout() -> None:
+    if not shutil.which("caddy"):
+        raise Refused("Caddy n'est pas installé")
+    if f"import {SITES_DIR}/" not in (read(CADDYFILE) or ""):
+        raise Refused(f"{CADDYFILE} n'importe pas {SITES_DIR} : relance « make install » (configuration Caddy HOMEBOX)")
+    os.makedirs(SITES_DIR, exist_ok=True)
+
+
+def check_domain(domain: str) -> str:
+    domain = (domain or "").strip().lower()
+    if not DOMAIN_RE.match(domain):
+        raise Refused("domaine invalide (ex. app.exemple.fr)")
+    return domain
+
+
+def site_path(domain: str) -> str:
+    return os.path.join(SITES_DIR, f"{domain}.caddy")
+
+
+def cmd_add(args: argparse.Namespace) -> None:
+    check_layout()
+    domain = check_domain(args.domain)
+    path = site_path(domain)
+    if os.path.exists(path):
+        raise Refused(f"le site {domain} existe déjà")
+
+    if bool(args.port) == bool(args.static):
+        raise Refused("indique soit un port (reverse proxy), soit un dossier statique")
+
+    if args.port:
+        if not re.match(r"^\d{2,5}$", args.port) or not 1 <= int(args.port) <= 65535:
+            raise Refused("port invalide")
+        port = int(args.port)
+        if port in FORBIDDEN_PORTS:
+            raise Refused(f"le port {port} ({FORBIDDEN_PORTS[port]}) ne doit pas être publié sur Internet")
+        body = f"\treverse_proxy 127.0.0.1:{port}\n"
+        target = f"127.0.0.1:{port}"
+    else:
+        root = os.path.realpath(args.static)
+        if not root.startswith(STATIC_ROOT) or not os.path.isdir(root):
+            raise Refused(f"le dossier doit exister et se trouver sous {STATIC_ROOT}")
+        if os.path.exists(os.path.join(root, ".env")) or os.path.isdir(os.path.join(root, ".git")):
+            raise Refused("ce dossier contient un .env ou un .git : il publierait tes secrets ou ton code. "
+                          "Publie plutôt le dossier de build (dist/, build/, public/)")
+        if re.search(r"\s", root):
+            raise Refused("le chemin ne doit pas contenir d'espace")
+        body = f"\troot * {root}\n\ttry_files {{path}} /index.html\n\tfile_server\n"
+        target = root
+
+    content = f"# HOMEBOX : géré par le dashboard / homebox-caddy\n{domain} {{\n\timport homebox_common\n{body}}}\n"
+    write(path, content)
+    apply_or_rollback({path: None}, f"Site ajouté : https://{domain} → {target}", domain=domain)
+
+
+def cmd_remove(args: argparse.Namespace) -> None:
+    check_layout()
+    domain = check_domain(args.domain)
+    path = site_path(domain)
+    previous = read(path)
+    if previous is None:
+        raise Refused(f"site inconnu : {domain}")
+    os.remove(path)
+    apply_or_rollback({path: previous}, f"Site retiré : {domain}")
+
+
+def cmd_set_email(args: argparse.Namespace) -> None:
+    check_layout()
+    email = (args.email or "").strip()
+    if email and not EMAIL_RE.match(email):
+        raise Refused("adresse e-mail invalide")
+    previous = read(CADDYFILE) or ""
+    lines = previous.splitlines(keepends=True)
+    # bloc d'options globales : de la première « { » seule sur sa ligne jusqu'à « } »
+    try:
+        start = next(i for i, l in enumerate(lines) if l.strip() == "{")
+        end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "}")
+    except StopIteration:
+        raise Refused("bloc d'options globales introuvable dans le Caddyfile")
+    block = [l for l in lines[start + 1:end] if not re.match(r"^\s*email\s+\S+\s*$", l)]
+    if email:
+        block.append(f"\temail {email}\n")
+    new = "".join(lines[:start + 1] + block + lines[end:])
+    write(CADDYFILE, new)
+    apply_or_rollback({CADDYFILE: previous},
+                      f"E-mail Let's Encrypt : {email}" if email else "E-mail Let's Encrypt retiré")
+
+
+def main() -> None:
+    if os.geteuid() != 0:
+        reply(False, "doit être lancé en root (sudo)")
+
+    parser = argparse.ArgumentParser(prog="homebox-caddy")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("status")
+    p_add = sub.add_parser("add")
+    p_add.add_argument("--domain", required=True)
+    p_add.add_argument("--port", default="")
+    p_add.add_argument("--static", default="")
+    p_rm = sub.add_parser("remove")
+    p_rm.add_argument("--domain", required=True)
+    sub.add_parser("reload")
+    p_mail = sub.add_parser("set-email")
+    p_mail.add_argument("--email", default="")
+
+    try:
+        args = parser.parse_args()
+    except SystemExit:
+        reply(False, "arguments invalides")
+
+    try:
+        if args.cmd == "status":
+            if not shutil.which("caddy"):
+                reply(False, "Caddy n'est pas installé")
+            reply(True, "ok", status=status())
+        if args.cmd == "add":
+            cmd_add(args)
+        if args.cmd == "remove":
+            cmd_remove(args)
+        if args.cmd == "reload":
+            ok, message = validate()
+            if not ok:
+                raise Refused(f"configuration invalide, rechargement annulé : {message}")
+            ok, message = reload_caddy()
+            reply(ok, "Caddy rechargé" if ok else f"Rechargement impossible : {message}")
+        if args.cmd == "set-email":
+            cmd_set_email(args)
+    except Refused as exc:
+        reply(False, str(exc))
+    except subprocess.TimeoutExpired:
+        reply(False, "délai dépassé")
+
+
+if __name__ == "__main__":
+    main()
