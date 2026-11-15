@@ -32,9 +32,16 @@ KillMode=process
 # Durcissement volontairement léger : les actions du dashboard appellent
 # git, gh, pnpm, npx et vercel, qui écrivent tous dans le HOME d'eleazar
 # (~/.npm, ~/.vercel, ~/.config/gh). Un ProtectHome les casserait.
-NoNewPrivileges=yes
+#
+# Pas de NoNewPrivileges : la page Pare-feu passe par
+# `sudo -n /usr/local/sbin/homebox-firewall`, seul programme autorisé
+# (/etc/sudoers.d/homebox-firewall), qui valide lui-même ses arguments.
+# (eleazar est déjà dans le groupe docker, équivalent root : NoNewPrivileges
+# n'apportait presque rien.)
+# ProtectSystem=full rend /etc en lecture seule pour le service ET ses enfants,
+# sudo compris : UFW doit pouvoir écrire ses règles et sa configuration.
 ProtectSystem=full
-ReadWritePaths=/srv
+ReadWritePaths=/srv /etc/ufw /etc/default/ufw
 
 # Journal : `journalctl -u srv-dashboard -f`
 StandardOutput=journal

@@ -156,3 +156,21 @@ def list_deployments(
 @secured.post("/sync", response_model=ActivityDetailOut, summary="Scanner /srv : enregistrer les nouveaux projets, retirer ceux dont le dossier a disparu")
 def sync(source: str = Depends(client_name)) -> dict:
     return services.sync(source=source, wait=True)
+
+
+@secured.get("/firewall", summary="Pare-feu : état UFW, règles, ports en écoute et leur exposition (lecture seule)")
+def firewall_status() -> dict:
+    import firewall
+
+    data = firewall.overview()
+    fw = data.get("fw") or {}
+    return {
+        "available": data["available"],
+        "error": data["error"],
+        "active": fw.get("active"),
+        "defaults": fw.get("defaults"),
+        "rules": fw.get("rules", []),
+        "fail2ban": fw.get("fail2ban"),
+        "exposed_count": data["exposed_count"],
+        "sockets": data["sockets"],
+    }

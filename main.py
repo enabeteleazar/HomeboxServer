@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
+import firewall  # noqa: E402
 import services  # noqa: E402
 import webauth  # noqa: E402
 from api import API_VERSION, router as public_router, secured as secured_router  # noqa: E402
@@ -311,6 +312,82 @@ def deployments_page(request: Request, project: Optional[str] = None, environmen
         deployments=journal.list_deployments(project=project, environment=environment, limit=200),
         selected_project=project, selected_environment=environment,
     )
+
+
+@app.get("/firewall", response_class=HTMLResponse, include_in_schema=False)
+def firewall_page(request: Request, preview: Optional[int] = None):
+    data = firewall.overview()
+    policy_preview = None
+    if preview and data["available"]:
+        try:
+            policy_preview = firewall.apply_policy(dry_run=True).get("message", "")
+        except firewall.FirewallError as exc:
+            policy_preview = exc.message
+    return render(request, "firewall.html", nav="firewall", fw=data, policy_preview=policy_preview,
+                  exposure_labels=firewall.EXPOSURE_LABELS)
+
+
+def _firewall_result(result: dict, success: str) -> RedirectResponse:
+    if result.get("ok"):
+        return back("/firewall", success)
+    return back("/firewall", result.get("message") or "Opération refusée", "error")
+
+
+@app.post("/firewall/rule", include_in_schema=False)
+def firewall_add(
+    action: str = Form("allow"),
+    port: str = Form(""),
+    proto: str = Form("tcp"),
+    source: str = Form("any"),
+    custom_source: str = Form(""),
+    comment: str = Form(""),
+):
+    iface = ""
+    if source == "lan":
+        source = firewall.lan_network() or ""
+        if not source:
+            return back("/firewall", "Réseau local introuvable", "error")
+    elif source == "tailscale":
+        source, iface = "any", "tailscale0"
+    elif source == "custom":
+        source = custom_source.strip()
+    elif source != "any":
+        return back("/firewall", "Source invalide", "error")
+    try:
+        result = firewall.add_rule(action, port.strip(), proto, source, iface, comment.strip())
+    except firewall.FirewallError as exc:
+        return back("/firewall", exc.message, "error")
+    return _firewall_result(result, "Règle ajoutée")
+
+
+@app.post("/firewall/delete", include_in_schema=False)
+def firewall_delete(number: int = Form(...), expect: str = Form(...)):
+    try:
+        result = firewall.delete_rule(number, expect)
+    except firewall.FirewallError as exc:
+        return back("/firewall", exc.message, "error")
+    return _firewall_result(result, "Règle supprimée")
+
+
+@app.post("/firewall/state", include_in_schema=False)
+def firewall_state(enabled: str = Form(...), confirm: str = Form("")):
+    turn_on = enabled == "on"
+    if not turn_on and confirm != "DÉSACTIVER":
+        return back("/firewall", "Désactivation annulée : tape DÉSACTIVER pour confirmer", "error")
+    try:
+        result = firewall.set_enabled(turn_on)
+    except firewall.FirewallError as exc:
+        return back("/firewall", exc.message, "error")
+    return _firewall_result(result, "Pare-feu activé" if turn_on else "Pare-feu désactivé")
+
+
+@app.post("/firewall/policy", include_in_schema=False)
+def firewall_policy():
+    try:
+        result = firewall.apply_policy(dry_run=False)
+    except firewall.FirewallError as exc:
+        return back("/firewall", exc.message, "error")
+    return _firewall_result(result, "Politique HOMEBOX appliquée")
 
 
 @app.get("/api", response_class=HTMLResponse, include_in_schema=False)

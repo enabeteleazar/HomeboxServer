@@ -508,3 +508,12 @@ pre.logs { max-height: 22rem; overflow-y: auto; }
 .auth-form { display: flex; flex-direction: column; gap: 1rem; }
 .auth-help { margin: 0; color: var(--text-2); font-size: 0.9rem; line-height: 1.5; }
 .auth-code { margin: 0; padding: 0.7rem 0.8rem; background: var(--surface-2, rgba(127,127,127,.08)); border: 1px solid var(--border); border-radius: var(--radius, 8px); overflow-x: auto; }
+
+/* --- page pare-feu ------------------------------------------------------- */
+.fw-state { display: flex; gap: 0.4rem; margin-top: 0.4rem; flex-wrap: wrap; }
+.fw-state input { flex: 1; min-width: 7rem; }
+.fw-form { display: flex; flex-direction: column; gap: 0.9rem; }
+.fw-ips { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.fw-ips li { padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.fw-setup { display: flex; flex-direction: column; gap: 0.8rem; }
+.btn-sm { padding: 0.3rem 0.55rem; font-size: 0.78rem; }

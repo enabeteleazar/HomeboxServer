@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Pare-feu{% endblock %}
+{% block heading %}Pare-feu{% endblock %}
+{% block subheading %}
+<p class="sub">
+  {% if not fw.available %}état inconnu
+  {% elif fw.fw.active %}UFW actif · entrant par défaut : {{ fw.fw.defaults.incoming }} · {{ fw.rule_count }} règle{{ "s" if fw.rule_count != 1 }}
+  {% else %}UFW inactif : tout ce qui écoute sur le réseau est joignable{% endif %}
+</p>
+{% endblock %}
+
+{% block page_actions %}
+{% if fw.available %}
+<a class="btn" href="/firewall?preview=1#policy">{{ ui.icon("refresh") }}Prévisualiser la politique HOMEBOX</a>
+<form method="post" action="/firewall/policy"
+      data-confirm="Réappliquer la politique HOMEBOX ? (SSH limité, 80/443, réseau local et Tailscale de confiance, le reste bloqué)">
+  <button class="btn btn-primary" type="submit">{{ ui.icon("shield") }}Appliquer la politique HOMEBOX</button>
+</form>
+{% endif %}
+{% endblock %}
+
+{% macro exposure_pill(level, label) -%}
+{% set cls = {"internet": "pill-error", "trusted": "pill-linked", "local": "pill-clean"}.get(level, "pill-neutral") %}
+<span class="pill {{ cls }}"><span class="dot"></span>{{ label }}</span>
+{%- endmacro %}
+
+{% macro action_pill(action) -%}
+{% set cls = {"ALLOW": "pill-clean", "LIMIT": "pill-dirty", "DENY": "pill-error", "REJECT": "pill-error"}.get(action, "pill-neutral") %}
+<span class="pill {{ cls }}">{{ {"ALLOW": "autoriser", "LIMIT": "limiter", "DENY": "bloquer", "REJECT": "rejeter"}.get(action, action|lower) }}</span>
+{%- endmacro %}
+
+{% block content %}
+
+{% if not fw.available %}
+<section class="card">
+  <header class="card-head"><div><h2>Pare-feu inaccessible</h2>
+    <p class="card-sub">{{ fw.error }}</p></div></header>
+  <div class="card-body fw-setup">
+    {% if fw.missing %}
+    <p class="auth-help">Le dashboard tourne sous ton utilisateur : il passe par le script <span class="mono">homebox-firewall</span>,
+      seul programme qu'il a le droit de lancer en root. Pour l'installer, sur homebox :</p>
+    <pre class="code mono">{{ fw.setup_hint }}
+sudo cp /srv/Dashboard/systemd/srv-dashboard.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl restart srv-dashboard</pre>
+    {% endif %}
+  </div>
+</section>
+{% else %}
+
+<section class="stats">
+  <article class="stat {{ 'stat-alert' if not fw.fw.active }}">
+    <p class="stat-label">État</p>
+    <p class="stat-value">{{ "Actif" if fw.fw.active else "Inactif" }}</p>
+    {% if fw.fw.active %}
+    <form method="post" action="/firewall/state" class="fw-state">
+      <input type="hidden" name="enabled" value="off">
+      <input type="text" name="confirm" placeholder="DÉSACTIVER" aria-label="Tape DÉSACTIVER pour confirmer" autocomplete="off">
+      <button class="btn btn-danger" type="submit">Désactiver</button>
+    </form>
+    {% else %}
+    <form method="post" action="/firewall/state" class="fw-state" data-confirm="Activer le pare-feu avec les règles enregistrées ?">
+      <input type="hidden" name="enabled" value="on">
+      <button class="btn btn-primary" type="submit">{{ ui.icon("shield") }}Activer</button>
+    </form>
+    {% endif %}
+  </article>
+  <article class="stat {{ 'stat-alert' if fw.exposed_count }}">
+    <p class="stat-label">Ports ouverts à Internet</p>
+    <p class="stat-value">{{ fw.exposed_count }}</p>
+    <p class="stat-note">{{ "voir le détail ci-dessous" if fw.exposed_count else "rien d'exposé" }}</p>
+  </article>
+  <article class="stat">
+    <p class="stat-label">Règles</p>
+    <p class="stat-value">{{ fw.rule_count }}</p>
+    <p class="stat-note">dont {{ fw.protected_count }} protégée{{ "s" if fw.protected_count != 1 }} · journal : {{ fw.fw.logging or "?" }}</p>
+  </article>
+  <article class="stat">
+    <p class="stat-label">Fail2ban (SSH)</p>
+    {% set f2b = fw.fw.fail2ban %}
+    {% if f2b and f2b.available %}
+    <p class="stat-value">{{ f2b.currently_banned }}<span class="stat-unit">bannie{{ "s" if f2b.currently_banned != 1 }}</span></p>
+    <p class="stat-note">{{ f2b.total_banned }} au total · {{ f2b.currently_failed }} échec{{ "s" if f2b.currently_failed != 1 }} en cours</p>
+    {% else %}
+    <p class="stat-value">—</p>
+    <p class="stat-note">fail2ban non disponible</p>
+    {% endif %}
+  </article>
+</section>
+
+{% if policy_preview %}
+<section class="card" id="policy">
+  <header class="card-head"><div><h2>Politique HOMEBOX (aperçu)</h2>
+    <p class="card-sub">Ce que ferait « Appliquer la politique HOMEBOX » — rien n'a été modifié.</p></div>
+    <a class="link" href="/firewall">Fermer</a></header>
+  <div class="card-body"><pre class="code mono">{{ policy_preview }}</pre></div>
+</section>
+{% endif %}
+
+<section class="card">
+  <header class="card-head"><div>
+    <h2>Exposition des ports</h2>
+    <p class="card-sub">Chaque service qui écoute, et qui peut l'atteindre compte tenu des règles (et de Docker, qui contourne UFW).</p>
+  </div>
+  <div class="legend">
+    {% for key in ["internet", "trusted", "local", "blocked"] %}<span class="legend-item">{{ exposure_pill(key, exposure_labels[key]) }}</span>{% endfor %}
+  </div></header>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Port</th><th>Service</th><th>Adresse d'écoute</th><th>Exposition</th><th>Pourquoi</th></tr></thead>
+      <tbody>
+        {% for s in fw.sockets %}
+        <tr>
+          <td data-label="Port"><span class="mono">{{ s.port }}/{{ s.proto }}</span></td>
+          <td data-label="Service">{{ s.service }}</td>
+          <td data-label="Adresse"><span class="mono">{{ s.address }}{% if s.iface %} <span class="cell-sub">({{ s.iface }})</span>{% endif %}</span></td>
+          <td data-label="Exposition">{{ exposure_pill(s.exposure, s.label) }}</td>
+          <td data-label="Pourquoi"><span class="cell-sub">{{ s.why }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5"><p class="empty">Aucun port en écoute détecté.</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <header class="card-head"><div>
+    <h2>Règles</h2>
+    <p class="card-sub">Évaluées dans l'ordre : la première qui correspond décide.
+      {{ ui.icon("lock") }} = posée par la politique HOMEBOX, non supprimable ici.</p>
+  </div></header>
+  {% if fw.fw.active %}
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>#</th><th>Destination</th><th>Action</th><th>Source</th><th>Commentaire</th><th></th></tr></thead>
+      <tbody>
+        {% for r in fw.fw.rules %}
+        <tr>
+          <td data-label="#"><span class="mono">{{ r.number }}</span>{% if r.v6 %} <span class="badge badge-preview">IPv6</span>{% endif %}</td>
+          <td data-label="Destination"><span class="mono">{{ r.to }}</span></td>
+          <td data-label="Action">{{ action_pill(r.action) }}</td>
+          <td data-label="Source"><span class="mono">{{ r["from"] }}</span></td>
+          <td data-label="Commentaire">{{ r.comment or "—" }}</td>
+          <td data-label="">
+            {% if r.protected %}
+            <span class="pill pill-neutral" title="Règle de la politique HOMEBOX">{{ ui.icon("lock") }}protégée</span>
+            {% else %}
+            <form method="post" action="/firewall/delete" data-confirm="Supprimer la règle {{ r.number }} ({{ r.text }}) ?">
+              <input type="hidden" name="number" value="{{ r.number }}">
+              <input type="hidden" name="expect" value="{{ r.text }}">
+              <button class="btn btn-danger btn-sm" type="submit">{{ ui.icon("trash") }}Supprimer</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6"><p class="empty">Aucune règle.</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body">
+    <p class="auth-help">Pare-feu inactif : voici les règles enregistrées, qui s'appliqueront à l'activation.
+      La suppression se fait une fois le pare-feu actif.</p>
+    {% if fw.fw.added %}<pre class="code mono">{% for line in fw.fw.added %}ufw {{ line }}
+{% endfor %}</pre>{% else %}<p class="empty">Aucune règle enregistrée : applique la politique HOMEBOX.</p>{% endif %}
+  </div>
+  {% endif %}
+</section>
+
+<section class="grid-2">
+  <article class="card">
+    <header class="card-head"><div>
+      <h2>Ajouter une règle</h2>
+      <p class="card-sub">Bloquer SSH ({{ fw.fw.ssh_port }}) ou le dashboard (5199) est refusé, pour ne pas te couper l'accès.</p>
+    </div></header>
+    <form method="post" action="/firewall/rule" class="card-body fw-form">
+      <div class="field-row">
+        <div class="field">
+          <label for="fw-action">Action</label>
+          <select id="fw-action" name="action">
+            <option value="allow">Autoriser</option>
+            <option value="limit">Limiter (anti force brute)</option>
+            <option value="deny">Bloquer</option>
+            <option value="reject">Rejeter</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="fw-port">Port ou plage</label>
+          <input id="fw-port" name="port" placeholder="8080 ou 8000:8100" pattern="\d{1,5}(:\d{1,5})?" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="fw-proto">Protocole</label>
+          <select id="fw-proto" name="proto">
+            <option value="tcp">TCP</option>
+            <option value="udp">UDP</option>
+            <option value="any">TCP + UDP</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="fw-source">Depuis</label>
+          <select id="fw-source" name="source" data-fw-source>
+            <option value="lan">Réseau local{% if fw.lan %} ({{ fw.lan }}){% endif %}</option>
+            <option value="tailscale">Tailscale</option>
+            <option value="any">Tout Internet</option>
+            <option value="custom">Autre adresse…</option>
+          </select>
+        </div>
+        <div class="field" data-fw-custom hidden>
+          <label for="fw-custom">Adresse ou réseau</label>
+          <input id="fw-custom" name="custom_source" placeholder="203.0.113.7 ou 10.0.0.0/8" autocomplete="off">
+        </div>
+      </div>
+      <div class="field">
+        <label for="fw-comment">Commentaire</label>
+        <input id="fw-comment" name="comment" maxlength="60" placeholder="À quoi sert cette règle" autocomplete="off">
+      </div>
+      <div><button class="btn btn-primary" type="submit">{{ ui.icon("plus") }}Ajouter</button></div>
+    </form>
+  </article>
+
+  <article class="card">
+    <header class="card-head"><div>
+      <h2>Adresses bannies</h2>
+      <p class="card-sub">Fail2ban bannit les adresses qui ratent trop de connexions SSH.</p>
+    </div></header>
+    <div class="card-body">
+      {% if f2b and f2b.available and f2b.banned_ips %}
+      <ul class="fw-ips">{% for ip in f2b.banned_ips %}<li class="mono">{{ ip }}</li>{% endfor %}</ul>
+      {% else %}
+      <p class="empty">Aucune adresse bannie en ce moment.</p>
+      {% endif %}
+    </div>
+  </article>
+</section>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var select = document.querySelector("[data-fw-source]");
+  var custom = document.querySelector("[data-fw-custom]");
+  if (!select || !custom) return;
+  function sync() {
+    custom.hidden = select.value !== "custom";
+    custom.querySelector("input").required = select.value === "custom";
+  }
+  select.addEventListener("change", sync);
+  sync();
+})();
+</script>
+{% endblock %}
