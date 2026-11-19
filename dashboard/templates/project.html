@@ -27,6 +27,9 @@
   {% if project.github_url %}
   <a class="btn" href="{{ project.github_url }}" target="_blank" rel="noopener">{{ ui.icon("github") }}GitHub</a>
   {% endif %}
+  {% if nexus_tower_url %}
+  <a class="btn" href="{{ nexus_tower_url }}/?projet={{ project.name | urlencode }}" target="_blank" rel="noopener">{{ ui.icon("external") }}Voir l'étage</a>
+  {% endif %}
   {% if project.last_production and project.last_production.url %}
   <a class="btn" href="{{ project.last_production.url }}" target="_blank" rel="noopener">{{ ui.icon("rocket") }}Production</a>
   {% endif %}

@@ -121,6 +121,10 @@ Pages rafraîchies en direct (en pause quand l'onglet est caché) :
 
 Tout est lu sans droits root (psutil, docker, systemctl), sauf le pare-feu qui passe par `homebox-firewall` (dossier infra/, `make tools`). Les mêmes données sont exposées à Neron : `GET /api/v1/system`, `/docker`, `/services`, `/firewall`, `/metrics?range=24h`, `/overview`, `/caddy`.
 
+### Lien vers Nexus Tower
+
+Si `NEXUS_TOWER_URL` est défini dans `/srv/.env` (par exemple `https://homebox-3.<tailnet>.ts.net:8444`), le menu affiche « Nexus Tower » et chaque fiche projet un bouton « Voir l'étage » qui ouvre la tour 3D directement sur ce projet (`?projet=<nom>`). La valeur est relue à chaque page ; sans elle, les liens n'apparaissent pas. Nexus Tower lit en retour `GET /api/v1/projects` avec le jeton de l'API (en-tête `X-Client: nexus-tower`).
+
 ### Connexion à l'interface web
 
 L'interface est protégée par un mot de passe unique ; l'API `/api/v1` garde son jeton Bearer et n'est pas concernée.

@@ -274,6 +274,8 @@ def render(request: Request, template: str, nav: str, **context):
         "priorities": services.PRIORITIES,
         "status_labels": services.STATUS_LABELS,
         "priority_labels": services.PRIORITY_LABELS,
+        # Lien vers Nexus Tower (la tour 3D des projets), relu dans /srv/.env à chaque page
+        "nexus_tower_url": (webauth.read_env_value("NEXUS_TOWER_URL") or "").rstrip("/"),
     }
     base.update(context)
     return templates.TemplateResponse(request, template, base)

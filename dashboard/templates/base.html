@@ -30,6 +30,9 @@
       <a class="nav-item {{ 'is-active' if nav == 'activity' }}" href="/activity">{{ ui.icon("pulse") }}Activité</a>
       <a class="nav-item {{ 'is-active' if nav == 'deployments' }}" href="/deployments">{{ ui.icon("rocket") }}Déploiements</a>
       <a class="nav-item {{ 'is-active' if nav == 'api' }}" href="/api">{{ ui.icon("plug") }}API & Neron</a>
+      {% if nexus_tower_url %}
+      <a class="nav-item" href="{{ nexus_tower_url }}" target="_blank" rel="noopener">{{ ui.icon("external") }}Nexus Tower</a>
+      {% endif %}
     </nav>
 
     <div class="sidebar-foot">
