@@ -374,12 +374,35 @@ def cmd_start(args):
     print(f"{project['name']} démarré (PID {process.pid})")
 
 
+def run_stop_command(project):
+    """Exécute la commande `stop` optionnelle du registre.
+
+    Sert quand le projet tourne sans PID suivi par srvctl (lancé via make,
+    à la main…). Retourne False si aucune commande n'est définie."""
+    command = project.get("stop")
+    if not command:
+        return False
+
+    print(f"Stopping {project['name']} via : {command}")
+    subprocess.run(
+        command,
+        cwd=project["path"],
+        shell=True,
+        executable="/bin/bash",
+        check=False,
+    )
+    print(f"{project['name']} arrêté")
+    return True
+
+
 def cmd_stop(args):
     project = get_project(args.project)
 
     state, pid = status(project)
 
     if state != "running" or not pid:
+        if state == "port-active" and run_stop_command(project):
+            return
         print(f"{project['name']} n'est pas démarré")
         return
 
