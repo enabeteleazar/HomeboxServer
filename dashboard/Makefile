@@ -244,7 +244,9 @@ start-project:
 	mkdir -p "$(ROOT)/.logs"; \
 	echo "START: $$project → port $$port"; \
 	if printf '%s\n' $(STATIC_PROJECTS) | grep -Fxq "$$project"; then \
-		cd "$(PROJECT_DIR)" && setsid nohup npx serve . -l "$$port" --no-clipboard > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
+		startcmd=$$($(SRVCTL) get-start "$$project" 2>/dev/null); \
+		[ -n "$$startcmd" ] || startcmd="npx serve . -l $$port --no-clipboard"; \
+		cd "$(PROJECT_DIR)" && setsid nohup bash -c "$$startcmd" > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
 	elif { [ "$$project" = "wwdc26Bingo" ] || [ "$$project" = "wwdc26-bingo" ]; }; then \
 		cd "$(PROJECT_DIR)" && setsid nohup env PORT="$$port" BASE_PATH=/ pnpm --filter @workspace/wwdc26-bingo run serve > "$(ROOT)/.logs/$$project.log" 2>&1 < /dev/null & \
 	elif [ "$$project" = "oraneCoatch" ]; then \
